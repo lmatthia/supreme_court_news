@@ -45,7 +45,7 @@ In the analysis, the following datasets contained in the repository were used:
 ### License 
 I assert no claims of ownership for data acquired through the use of the Supreme Court Database or Oyez.
 
-Data licensed under CC BY. (see Dataverse)
+MIT License applies to the code, data is licensed under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/)
 
 ### Contributing
 
