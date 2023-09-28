@@ -9,6 +9,6 @@ jobs:
       - name: Send repo to Dataverse 
         uses: atrisovic/dataverse-uploader@master
         with:
-          DATAVERSE_TOKEN: ${{secrets.375c9133-02f7-48a5-9aa9-f71857c09016}}
+          DATAVERSE_TOKEN: ${{secrets.DATAVERSE_TOKEN}}
           DATAVERSE_SERVER: https://dataverse.harvard.edu/
           DATAVERSE_DATASET_DOI: doi:10.7910/DVN/1JFUWF
