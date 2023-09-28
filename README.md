@@ -1,3 +1,6 @@
+[![DOI](https://img.shields.io/badge/Dataverse%20DOI-10.7910/DVN/1JFUWF-orange)](https://www.doi.org/10.7910/DVN/1JFUWF)
+
+
 ### Overview
 
 This repository contains a sample of evening television news transcripts with identified Supreme Court case mentions analyzed in my dissertation's three empirical chapters examining the volume, format, and presentation of media coverage of the U.S. Supreme Court during the 1990-2018 terms. 
@@ -14,7 +17,7 @@ Folder structure:
 
 ### Stats & Pretty Plots
 
-- [`rmd/001_NewsVolumeStats.Rmd`](rmd/001_NewsVolumeStats.Rmd) contains the results of the statistical analysis for my chapter on news volume. Includes robustness checks.[Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/001_NewsVolumeStats.html)
+- [`rmd/001_NewsVolumeStats.Rmd`](rmd/001_NewsVolumeStats.Rmd) contains the results of the statistical analysis for my chapter on news volume. Includes robustness checks. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/001_NewsVolumeStats.html)
 - [`rmd/002_NewsVolumePlots.Rmd`](rmd/002_NewsVolumePlots.Rmd) presents the plots for the news volume chapter, R version and after manual edits in Adobe Illustrator. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/002_NewsVolumePlots.html)
 - [`rmd/003_NewsFormatStats.Rmd`](rmd/003_NewsFormatStats.Rmd) contains the results of the statistical analysis for my chapter on news format. Includes robustness checks. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/003_NewsFormatStats.html)
 - [`rmd/004_NewsFormatPlots.Rmd`](rmd/004_NewsFormatPlots.Rmd) presents the plots for the news format chapter, R version and after manual edits in Adobe Illustrator. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/004_NewsFormatPlots.html)
@@ -41,6 +44,8 @@ In the analysis, the following datasets contained in the repository were used:
 
 ### License 
 I assert no claims of ownership for data acquired through the use of the Supreme Court Database or Oyez.
+
+Data licensed under CC BY. (see Dataverse)
 
 ### Contributing
 
