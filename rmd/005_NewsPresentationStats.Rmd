@@ -1,0 +1,557 @@
+---
+title: "NewsPresentationStats"
+author: "Lisa Matthias"
+date: "25 9 2023"
+output: 
+  html_document: 
+    theme: readable
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, echo=FALSE}
+#set up global R to display 3 digits (0.000)
+options
+options(digits = 3)
+
+#set up knit r global
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  echo = TRUE,
+  fig.path = "figures/",
+  fig.width = 6,
+  fig.asp = 0.618,
+  out.width = "70%",
+  fig.align = "center",
+  dpi = 300)
+```
+
+```{r packages, echo=FALSE}
+library(datawizard)
+library(gt)
+library(janitor)
+library(tidyverse)
+```
+
+```{r main-data, echo=FALSE}
+# Read the local copy. Call this "mntn_emo"
+mntn_emo <- read.csv("data/NewsEmotion.csv")
+```
+
+```{r variable-transformation, echo=FALSE}
+# Set factor levels and labels
+TimePeriodLevels <- c("2000_2018", "1990_1999")
+
+# Mutate columns in mntn_emo
+mntn_emo$ChannelType <- factor(mntn_emo$ChannelType,
+  levels = c("NetworkNews", "CableNews")
+)
+
+mntn_emo$IssueArea <- factor(mntn_emo$IssueArea,
+  levels = c("Abortion", "EconomicActivity", "FirstAmendment","Sex Discrimination"))
+
+mntn_emo$NewsProgram <- factor(mntn_emo$NewsProgram, levels = c("Hardball", "SpecialReport", "WorldNewsTonight"))
+
+mntn_emo$TimePeriod <- factor(mntn_emo$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+mntn_emo$MultiMentionType <- as.factor(mntn_emo$MultiMentionType)
+
+
+mntn_emo <- mntn_emo %>%
+  mutate(ChannelTypeSplit = case_when(ChannelType == "CableNews" &  TimePeriod == "2000_2018" ~ "CableNews", ChannelType == "NetworkNews" &  TimePeriod == "2000_2018" ~ "NetworkNewsPost2000", ChannelType == "NetworkNews" &  TimePeriod == "1990_1999" ~ "NetworkNewsPre2000"))
+
+mntn_emo$ChannelTypeSplit <- factor(mntn_emo$ChannelTypeSplit, levels = c("NetworkNewsPre2000", "NetworkNewsPost2000", "CableNews"))
+
+#Robustness set with Identical news mentions included only once
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" == "Identical"
+mntn_emo_Identical <- mntn_emo[mntn_emo$MultiMentionType == "Identical",]
+
+# Use the unique function to only keep the first instance of each "TranscriptID" for Identicals
+mntn_emo_Identical <- mntn_emo_Identical[!duplicated(mntn_emo_Identical$TranscriptID),]
+
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" != "Identical"
+mntn_emo_non_Identical <- mntn_emo[mntn_emo$MultiMentionType != "Identical",]
+
+# Concatenate the filtered dataframes
+mntn_emo_robust <- rbind(mntn_emo_non_Identical, mntn_emo_Identical)
+
+```
+
+
+```{r chisq-functions, echo=FALSE}
+#Function for chisq pre-2000 & post-2000 network news
+function_chisq_emo_pre2000 <- function(df, news_var, var){
+  news_var <- sym(news_var)
+  var <- sym(var)
+  
+  x <- df %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var , !! var, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+#Function for chisq post-2000 network & cable news 
+function_chisq_emo_post2000 <- function(df, news_var, var){
+  news_var <- sym(news_var)
+  var <- sym(var)
+  
+  x <- df %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var , !! var, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+#Function for chisq cable programs
+function_chisq_emo_cable <- function(df, news_var, var){
+  news_var <- sym(news_var)
+  var <- sym(var)
+  
+  x <- df %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var , !! var, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+#Function to print chisq results, observed values, expected values, and standardized residuals
+consolidate_chisq_results <- function(chisq_context_time, context_col) {
+  
+  observed <- chisq_context_time$observed
+  expected <- chisq_context_time$expected
+  stdres <- chisq_context_time$stdres
+  
+  # Dynamically get the name of the first column
+  first_col_name <- colnames(observed)[1]
+  
+    result_df <- data.frame(
+      FirstColumn = observed[, 1],
+      Observed_1 = observed[, 2],
+      Observed_2 = observed[, 3],
+      Expected_1 = expected[, 2],
+      Expected_2 = expected[, 3],
+      StdRes_1 = stdres[, 2],
+      StdRes_2 = stdres[, 3]
+    )
+  
+  long_df <- result_df %>%
+    pivot_longer(
+      cols = starts_with("Observed") | starts_with("Expected") | starts_with("StdRes"),
+      names_to = c(".value", context_col),
+      names_pattern = "(Observed|Expected|StdRes)_(\\d+)"
+    ) %>%
+    select(FirstColumn, all_of(context_col), Observed, Expected, StdRes) %>%
+    rename_at(vars(FirstColumn), ~first_col_name)  # Rename 'FirstColumn' back to its original name
+  
+ long_df <- long_df %>%
+    mutate(
+      !!context_col := case_when(
+        context_col == "Present" ~ factor(!!sym(context_col), levels = c("1", "2"), labels = c("No", "Yes")),
+        context_col == "EmotionType" ~ factor(!!sym(context_col), levels = c("1", "2"), labels = c("NegativeEmotion", "PositiveEmotion")),
+        TRUE ~ as.factor(!!sym(context_col))
+      ),
+      Expected = round(Expected, digits = 2),
+      StdRes = round(StdRes, digits = 2)
+    )
+  
+  return(long_df)
+}
+```
+
+## Presence of Emotional Appeals
+
+This compares robust samples of news mentions between channel types and time periods and checks whether the share of news mentions with emotional appeals present/absent is comparable between them.
+
+### Network News Time Periods
+
+This compares network news mentions from the 1990-1999 and 2000-2018 terms.
+
+```{r chisq-emo-present-time-period-robust, results='asis'}
+#Robust with identical mentions left out
+#Chi-Squared for pre-2000 and post-2000 network news ~ emotion
+chisq_emo_time_robust <- function_chisq_emo_pre2000(mntn_emo_robust, news_var = "ChannelTypeSplit", var = "EmotionPresent")
+
+chisq_emo_time_robust
+```
+
+### Channel Type
+
+This compares network and cable news mentions from the 2000-2018 terms.
+
+```{r chisq-emo-present-channel-robust, results='asis'}
+#Chi-Squared for post-2000 network news and cable news ~ emotion
+chisq_emo_channel_robust <- function_chisq_emo_post2000(mntn_emo_robust, news_var = "ChannelTypeSplit", var = "EmotionPresent")
+
+chisq_emo_channel_robust
+
+```
+
+
+### Cable News Program
+
+This compares Hardball (MSNBC) and  Special Report (Fox News) news mentions from the 2000-2018 terms.
+
+```{r chisq-emo-present-cabel-robust, results='asis'}
+#Chi-Squared for Hardball and Special Report ~ emotion
+chisq_emo_cable_robust <- function_chisq_emo_cable(mntn_emo_robust, news_var = "NewsProgram", var = "EmotionPresent")
+
+chisq_emo_cable_robust
+```
+
+```{r chisq-emo-present-cabel-robust-extra}
+chisq_emo_cable_robust_results <- consolidate_chisq_results(chisq_emo_cable_robust, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups())
+
+chisq_emo_cable_robust_results
+```
+
+### Not Robust
+This is just to show the results with the full sample.
+
+**First the network news time periods.**
+
+```{r chisq-emo-present-time-period-unfiltered, , results='asis'}
+#Chi-Squared for pre-2000 and post-2000 network news ~ emotion
+chisq_emo_time_unfiltered <- function_chisq_emo_pre2000(mntn_emo, news_var = "ChannelTypeSplit", var = "EmotionPresent")
+
+chisq_emo_time_unfiltered
+```
+
+**Then network and cable news, 2000-2018 terms.**
+
+```{r chisq-emo-present-channel-unfiltered, results='asis'}
+#Chi-Squared for post-2000 network news and cable news ~ emotion
+chisq_emo_channel_unfiltered <- function_chisq_emo_post2000(mntn_emo, news_var = "ChannelTypeSplit", var = "EmotionPresent")
+
+chisq_emo_channel_unfiltered
+```
+
+**And the cable programs.**
+
+```{r chisq-emo-present-cable-unfiltered, results='asis'}
+#Chi-Squared for Hardball and Special Report ~ emotion
+chisq_emo_cable_unfiltered <- function_chisq_emo_cable(mntn_emo, news_var = "NewsProgram", var = "EmotionPresent")
+
+chisq_emo_cable_unfiltered
+```
+
+
+## Type of Emotional Appeals
+
+This compares news samples based on the share of positive/negative emotional appeals included in the news mentions as well as the distinct emotions featured most frequently.
+
+### Network News Time Period
+This compares network news mentions from the 1990-1999 and 2000-2018 terms.
+
+```{r rchisq-emo-type-time-period-robust, results='asis'}
+contingency_emo_type_channels_robust <- mntn_emo_robust %>%
+  filter(EmotionPresent == "1") %>%
+  group_by(ChannelTypeSplit) %>%
+  summarise(NegativeEmotion = sum(NegativeEmotion, na.rm = TRUE),
+            PositiveEmotion = sum(PositiveEmotion, na.rm = TRUE)) %>%
+  as_tabyl()
+
+chisq_emo_type_time_robust <- contingency_emo_type_channels_robust %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  janitor::chisq.test(correct = FALSE)
+
+chisq_emo_type_time_robust
+```
+
+### Channel Type
+This compares network and cable news mentions from the 2000-2018 terms.
+
+```{r chisq-emo-type-channel-robust, results='asis'}
+chisq_emo_type_channel_robust <- contingency_emo_type_channels_robust %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  janitor::chisq.test(correct = FALSE)
+
+chisq_emo_type_channel_robust
+```
+
+
+### Cable News Programs
+
+This compares Hardball (MSNBC) and  Special Report (Fox News) news mentions from the 2000-2018 terms.
+
+```{r chisq-emo-type-cable-robust, results='asis'}
+contingency_emo_type_cable_robust <- mntn_emo_robust %>%
+  filter(EmotionPresent == "1") %>%
+  group_by(NewsProgram) %>%
+  summarise(NegativeEmotion = sum(NegativeEmotion, na.rm = TRUE),
+            PositiveEmotion = sum(PositiveEmotion, na.rm = TRUE)) %>%
+  as_tabyl()
+
+chisq_emo_type_cable_robust <- contingency_emo_type_cable_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  janitor::chisq.test(correct = FALSE)
+  
+chisq_emo_type_cable_robust
+```
+
+```{r chisq-emo-type-cable-robust-extra}
+chisq_emo_type_cable_robust_results <- consolidate_chisq_results(chisq_emo_type_cable_robust, context_col = "EmotionType") %>%
+  group_by(EmotionType) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) %>%
+  tab_footnote(
+  footnote = "A = Hardball; B = Special Report"
+)
+
+chisq_emo_type_cable_robust_results
+```
+
+```{r results-channel-emo-type-median-robust, include=FALSE}
+### When Emotional Appeals Were Included, How Many On Avg?
+
+#Getting the mean and median number of positive and negative emotional appeals per news sample.
+
+
+#Get median and mean
+median_channel <- mntn_emo_robust %>%
+  filter(EmotionPresent == "1") %>%
+  group_by(ChannelTypeSplit)  %>%
+  summarize(mean_value_pos = mean(PositiveEmotion, na.rm = TRUE),
+            median_value_pos = median(PositiveEmotion, na.rm = TRUE),
+            mean_value_neg = mean(NegativeEmotion, na.rm = TRUE),
+            median_value_neg = median(NegativeEmotion, na.rm = TRUE))
+
+median_channel
+```
+
+
+```{r results-cable-emo-type-median-robust, include=FALSE}
+#Get median and mean
+median_cable <- mntn_emo_robust %>%
+  filter(EmotionPresent == "1") %>%
+  group_by(NewsProgram)  %>%
+  summarize(mean_value_pos = mean(PositiveEmotion, na.rm = TRUE),
+            median_value_pos = median(PositiveEmotion, na.rm = TRUE),
+            mean_value_neg = mean(NegativeEmotion, na.rm = TRUE),
+            median_value_neg = median(NegativeEmotion, na.rm = TRUE))
+
+median_cable
+```
+
+
+```{r results-time-period-emo-unfiltered, include=FALSE}
+### Not Robust 
+contingency_emo_type_channels <- mntn_emo %>%
+  filter(EmotionPresent == "1") %>%
+  group_by(ChannelTypeSplit) %>%
+  summarise(NegativeEmotion = sum(NegativeEmotion, na.rm = TRUE),
+            PositiveEmotion = sum(PositiveEmotion, na.rm = TRUE)) %>%
+  as_tabyl()
+
+chisq_emo_type_channels <- contingency_emo_type_channels %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  janitor::chisq.test(correct = FALSE) 
+```
+
+
+```{r results-channel-emo-unfiltered, include=FALSE}
+# Cable and network news.
+chisq_emo_type_post2000 <- contingency_emo_type_channels %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  janitor::chisq.test(correct = FALSE)
+```
+
+## Most Frequently Used Emotions
+
+### Channel Type and Time Period, Top 3.
+
+```{r top3-emo-channel-time-robust}
+top3_emo_channel <- mntn_emo_robust %>%
+  select(ChannelTypeSplit, NegativeEmotionAlarming:PositiveEmotionThing) %>%
+  group_by(ChannelTypeSplit) %>%
+summarise(across(everything(), list(sum))) %>%
+  group_by(ChannelTypeSplit) %>%
+  pivot_longer(cols = NegativeEmotionAlarming_1:PositiveEmotionThing_1,
+               names_to = "EmotionTypeSpec",
+               values_to = "n") %>%
+  arrange(desc(n)) %>% 
+  slice(1:3)
+
+top3_emo_channel_results <- top3_emo_channel %>%
+  group_by(ChannelTypeSplit) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+top3_emo_channel_results
+
+```
+
+```{r results-news-channel-top5-emo, include=FALSE}
+top5_emo_channel <- mntn_emo_robust %>%
+  select(ChannelTypeSplit, NegativeEmotionAlarming:PositiveEmotionThing) %>%
+  group_by(ChannelTypeSplit) %>%
+summarise(across(everything(), list(sum))) %>%
+  group_by(ChannelTypeSplit) %>%
+  pivot_longer(cols = NegativeEmotionAlarming_1:PositiveEmotionThing_1,
+               names_to = "EmotionTypeSpec",
+               values_to = "n") %>%
+  arrange(desc(n)) %>% 
+  slice(1:5)
+```
+
+### Cable News Program, Top 3.
+
+```{r results-news-cable-top3-emo}
+top3_emo_cable <- mntn_emo_robust %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  select(NewsProgram, NegativeEmotionAlarming:PositiveEmotionThing) %>%
+  group_by(NewsProgram) %>%
+summarise(across(everything(), list(sum))) %>%
+  group_by(NewsProgram) %>%
+  pivot_longer(cols = NegativeEmotionAlarming_1:PositiveEmotionThing_1,
+               names_to = "EmotionTypeSpec",
+               values_to = "n") %>%
+  arrange(desc(n)) %>% 
+  slice(1:3)
+
+top3_emo_cable_results <- top3_emo_cable %>%
+  group_by(NewsProgram) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+top3_emo_cable_results
+```
+
+
+```{r results-channel-type-quotes-para, include=FALSE, eval=FALSE}
+## Snippets for writing
+#Create filter, so that "Cert" "PostCert", and "PostArgument" are removed from df, and only remaining case stages are included
+cert_arg_removed <- c("PostDecision", "Decision", "Argument")
+
+#Create table with quote and paraphrase counts by case stage and channel type
+qt_para_channel <- mntn_emo_robust %>%
+  filter(CaseStage %in% cert_arg_removed) %>%
+  select(ChannelTypeSplit, CaseStage, MajQt:ArgPara) %>%
+  group_by(ChannelTypeSplit, CaseStage) %>%
+summarise(across(everything(), list(sum))) 
+
+#Create table with quote and paraphrase counts by case stage and news sector
+qt_para_channel_main <- mntn_emo_robust %>%
+  filter(CaseStage %in% cert_arg_removed) %>%
+  select(ChannelTypeSplit, CaseStage, MajQt:ArgPara) %>%
+  group_by(ChannelTypeSplit, CaseStage) %>%
+summarise(across(everything(), list(sum))) 
+```
+
+
+```{r info-snippets-for-writing, include=FALSE, eval=FALSE}
+#Calculate how many news mentions and emotional appeals are in the main sample and the robust sample
+appeals_n <- mntn_emo %>% 
+  summarise(n_mntns_total = n(),
+            n_emo = sum(NegativeEmotion + PositiveEmotion))
+
+appeals_n_robust <- mntn_emo_robust %>% 
+  summarise(n_mntns_total = n(),
+            n_emo = sum(NegativeEmotion + PositiveEmotion))
+
+
+#Get number of news mentions that include at least 1 direct quote: Channel Type
+mntns_qt_stage_count_channel <-  mntn_emo_robust %>%
+  filter(CaseStage == "Decision" | CaseStage == "Argument") %>%
+  group_by(ChannelTypeSplit, CaseStage) %>%
+  summarise(n_mntns_total = n(),
+            n_mntns_qt = sum(
+              (CaseStage == "Decision" & (MajQt > 0 | DissQt > 0)) | 
+                (CaseStage == "Argument" & ArgQt > 0)),
+            n_arg_qt = sum(ArgQt),
+            n_maj_qt = sum(MajQt),
+            n_diss_qt = sum(DissQt))
+
+#Get number of news mentions that include at least 1 direct quote: Cable News
+mntns_qt_stage_count_cable <-  mntn_emo_robust %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  filter(CaseStage == "Decision" | CaseStage == "Argument") %>%
+  group_by(NewsProgram, CaseStage) %>%
+  summarise(n_mntns_total = n(),
+            n_mntns_qt = sum(
+              (CaseStage == "Decision" & (MajQt > 0 | DissQt > 0)) | 
+                (CaseStage == "Argument" & ArgQt > 0)),
+            n_arg_qt = sum(ArgQt),
+            n_maj_qt = sum(MajQt),
+            n_diss_qt = sum(DissQt))
+
+
+num_rows <-  mntn_emo_robust %>%
+  filter(NewsProgram == "SpecialReport") %>%
+  filter(MajQt == 0, MajPara == 0, DissQt == 0, DissPara == 0, ArgQt == 0, ArgPara == 0) %>%
+  nrow()
+
+#Find out how many emotions are present by News Program
+# Group the dataframe by "NewsProgram"
+distinct_emo_count_df <-  mntn_emo_robust %>% 
+  group_by(NewsProgram)
+
+  # Sum the columns from NegativeEmotionAlarming to PositiveEmotionThing for each group
+  distinct_emo_count <- distinct_emo_count_df %>% summarise(across(NegativeEmotionAlarming:PositiveEmotionThing, sum)) %>%
+     pivot_longer(cols = NegativeEmotionAlarming:PositiveEmotionThing, names_to = "Emo", values_to = "n") %>%
+     filter(n > 0) %>%
+      group_by(NewsProgram) %>%
+  summarise(num_rows = n())
+  
+  
+  #Find out how many emotions are present by ChannelTypeSplit
+# Group the dataframe by "ChannelTypeSplit"
+distinct_emo_count_df <-  mntn_emo_robust %>% 
+  group_by(ChannelTypeSplit)
+
+  # Sum the columns from NegativeEmotionAlarming to PositiveEmotionThing for each group
+  distinct_emo_count <- distinct_emo_count_df %>% summarise(across(NegativeEmotionAlarming:PositiveEmotionThing, sum)) %>%
+     pivot_longer(cols = NegativeEmotionAlarming:PositiveEmotionThing, names_to = "Emo", values_to = "n") %>%
+     filter(n > 0) %>%
+      group_by(ChannelTypeSplit) %>%
+  summarise(num_rows = n())
+  
+
+ neg_general_plus_fear_channel_type <- mntn_emo_robust %>%
+    group_by(ChannelTypeSplit) %>%
+    summarise(Neg = sum(NegativeEmotionDimensionGeneral+NegativeEmotionFear))
+ 
+
+##Doodles
+  mntn_emo_robust$CaseStageCondensed <- fct_collapse(mntn_emo_robust$CaseStage,
+  "PreDecision" = c(
+    "Cert", "PostCert",
+    "Argument", "PostArgument"),
+  "Decision" = "Decision",
+  "PostDecision" = "PostDecision"
+)
+
+mntn_emo_robust$CaseStageCondensed <- factor(mntn_emo_robust$CaseStageCondensed, levels = c("PreDecision", "Decision", "PostDecision"), labels = c("PreDecision", "Decision", "PostDecision"))
+
+##include this in github repo (past-Lisa didn't leave a note why to include this)
+violin_channel_neg_case_stage <-
+mntn_emo_robust %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+ggstatsplot::grouped_ggbetweenstats(x = CaseStageCondensed, y = NegativeEmotion, grouping.var = ChannelTypeSplit, type = "np")
+
+violin_channel_neg_case_stage
+```
+  

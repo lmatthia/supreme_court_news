@@ -1,0 +1,179 @@
+---
+title: "Methods"
+author: "Lisa Matthias"
+date: "3 5 2023"
+output: html_document
+---
+
+```{r setup}
+#set up global R to display 3 digits (0.000)
+options
+options(digits = 4)
+
+#set up knit r global
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  echo = FALSE,
+  fig.path = "figures/",
+  fig.width = 6,
+  fig.asp = 0.618,
+  out.width = "70%",
+  fig.align = "center",
+  dpi = 300)
+```
+
+## Timeline
+
+```{r timeline}
+library("timelineS")
+
+# create the Events vector
+Events <- c("Start", "Launch of MSNBC and Fox News", "Release of Same-Day Slip Opinions", 
+            "Identification of Justices in Oral Argument Transcripts", "Release of Same-Day Oral Argument Transcripts", 
+            "Liberal Shift of MSNBC", "Release of Slip Opinions within Minutes", 
+            "Release of Oral Argument Audio Recordings at the End of the Week", 
+            "50% of Americans Use Social Media", "End")
+
+# create the Event_Dates vector
+Event_Dates <- c(1990, 1996, 2000, 2004, 2006, 2007, 2009, 2010, 2012, 2019)
+
+# create the data.frame(Events = Events, Event_Dates = Event_Dates)
+df_timeline <- data.frame(Events = Events, Event_Dates = Event_Dates)
+df_timeline$Event_Dates <- as.Date(paste0(df_timeline$Event_Dates, "-01-01"))
+df_timeline$Events <- as.factor(df_timeline$Events)
+
+timeline <- timelineS(df_timeline, main = "Shifts in U.S. News Media and for Supreme Court Reporters", buffer.days = 333)
+
+ggsave("timeline_methods.svg", plot = timeline, width = 150, units = "mm")
+svglite("timeline.svg", width = 8, height = 6)
+plot(timeline)
+dev.off()
+
+```
+
+Final timeline was edited in Adobe Illustrator
+
+```{r timeline-methods-edit}
+knitr::include_graphics("plots/AdobeEdits/timeline_edit.png")
+```
+
+## MSNBC Lineup
+
+```{r msnbc-lineup}
+library(googledrive)
+
+# Get spreadsheet from Google Drive and save a local copy
+googledrive::drive_download(
+  googledrive::as_id("https://docs.google.com/spreadsheets/d/1gffRFK2T0ETgBMgG48dfeRiTPESR4WODiyU2BsxwSTo/edit#gid=0"),
+  path = "data/msnbc_lineup",
+  overwrite = TRUE
+)
+
+# Read the "lineup" sheet from the local copy. Call this "msnbc_lineup"
+msnbc_lineup <- readxl::read_xlsx("data/msnbc_lineup.xlsx",
+  sheet =
+    "lineup"
+)
+
+msnbc_lineup$Year <- as.factor(msnbc_lineup$Year)
+msnbc_lineup$Timeslot <- as.factor(msnbc_lineup$Timeslot)
+msnbc_lineup$x <- as.factor(msnbc_lineup$x)
+
+library(tidyverse)
+library(scales) # for muted function
+
+plot_msnbc-lineup <- ggplot(msnbc_lineup, aes(Timeslot, fct_rev(Year))) + # x and y axes => Var1 and Var2
+  geom_tile(aes(fill = Count)) + # background colours are mapped according to the count column
+  geom_text(aes(label = NewsProgram)) + # write the labels
+  scale_fill_gradient(low = "#FFFFFF",
+                       high = "#4378BC", limits=c(1, 28), breaks=c(1,10,20,28), oob=squish
+                     ) +
+  scale_x_discrete(position = "top") +
+  theme_minimal() + theme(panel.grid.major = element_blank())
+
+ggsave("msnbc_lineup.svg", width = 180, units = "mm")
+
+ggplot(msnbc_lineup, aes(x, fct_rev(Year))) + # x and y axes => Var1 and Var2
+  geom_tile(aes(fill = Count)) + # background colours are mapped according to the count column
+  geom_text(aes(label = NewsProgram)) + # write the labels
+  scale_fill_gradient(low = "#FFFFFF",
+                       high = "#4378BC", limits=c(1, 28), breaks=c(1,10,20,28), oob=squish
+                     ) +
+  facet_grid(.~Timeslot) +
+  theme_minimal() + theme(panel.grid.major = element_blank())
+
+plot_msnbc
+```
+
+Final lineup was edited in Adobe Illustrator
+
+```{r msnbc-lineup-edit}
+knitr::include_graphics("plots/AdobeEdits/msnbc_lineup_edit.png")
+```
+
+## Sample Databases
+```{r sample-databases}
+library(dplyr)
+library(eulerr)
+library(googledrive)
+
+# Read the local copy. Call this "mntn_raw"
+mntn_raw <- read.csv("data/NewsTranscriptIndex.csv")
+
+
+create_euler_data <- function(df, filter_var, filter_value, col1, col2) {
+  
+  # Filter data for the specific program
+  df_filtered <- df %>% filter((!!sym(filter_var)) == filter_value)
+  
+  col1_result <- df_filtered %>%
+    filter((!!sym(col1)) == 1, (!!sym(col2)) == 0) %>%
+    count()
+  only_col1 <- col1_result$n
+  
+  col2_result <- df_filtered %>%
+    filter((!!sym(col1)) == 0, (!!sym(col2)) == 1) %>%
+    count()
+  only_col2 <- col2_result$n
+  
+  both_result <- df_filtered %>%
+    filter((!!sym(col1)) == 1, (!!sym(col2)) == 1) %>%
+    count()
+  both <- both_result$n
+  
+  # Create named numeric vector
+  sets <- c(only_col1, only_col2, both)
+  names(sets) <- c(col1, col2, paste0(col1, "&", col2))
+  
+  # Return the sets
+  return(sets)
+}
+
+transcripts_raw$NewsProgram <- factor(transcripts_raw$NewsProgram)
+
+sets_Hardball <- create_euler_data(transcripts_raw, "NewsProgram", "Hardball", "Factiva", "NexisUni")
+
+p1 <- plot(euler(sets_Hardball))
+
+sets_SpecialReport <- create_euler_data(transcripts_raw, "NewsProgram", "SpecialReport", "Factiva", "NexisUni")
+
+p2 <- plot(euler(sets_SpecialReport))
+
+sets_WorldNewsTonight <- create_euler_data(transcripts_raw, "NewsProgram", "WorldNewsTonight", "Factiva", "NexisUni")
+
+p3 <- plot(euler(sets_WorldNewsTonight))
+
+p1
+p2
+p3
+
+```
+
+Final euler was edited in Adobe Illustrator
+
+```{r euler-edit}
+knitr::include_graphics("plots/AdobeEdits/data_sources_euler_edit.png")
+```

@@ -1,0 +1,993 @@
+---
+title: "NewsFormatStats"
+author: "Lisa Matthias"
+date: "25 9 2023"
+output: 
+  html_document: 
+    keep_md: true
+    toc: yes
+    toc_float: yes
+    theme: readable
+    code_folding: hide
+---
+
+```{r setup, echo=FALSE}
+
+#set up knit r global
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  echo = TRUE,
+  fig.width = 6,
+  fig.asp = 0.618,
+  out.width = "70%",
+  fig.align = "center",
+  dpi = 300)
+```
+
+```{r packages, echo=FALSE}
+library(datawizard)
+#library(ggstatsplot)
+library(gt)
+library(janitor)
+library(tidyverse)
+```
+
+```{r main-data, echo=FALSE}
+# Read the "NewsMentionsSample" sheet from the local copy. Call this "mntn_raw"
+mntn_raw <- read.csv("data/NewsMentionSample.csv")
+
+```
+
+```{r variable-transformation, echo=FALSE}
+# Set factor levels and labels
+IssueAreaLevels <- c(
+  "Abortion", "EconomicActivity",
+  "FirstAmendment",
+  "SexDiscrimination"
+)
+
+CaseStageLevels <- c(
+  "Cert", "PostCert", "Argument",
+  "PostArgument", "Decision",
+  "PostDecision"
+)
+
+ChannelTypeLevels <- c("NetworkNews", "CableNews")
+
+TimePeriodLevels <- c("2000_2018", "1990_1999")
+
+# Mutate columns in mntn_raw
+mntn_raw$IssueArea <- factor(mntn_raw$IssueArea,
+  levels = IssueAreaLevels
+)
+
+
+mntn_raw$CaseStage <- factor(mntn_raw$CaseStage,
+  levels = CaseStageLevels
+)
+
+mntn_raw$ChannelType <- factor(mntn_raw$ChannelType,
+  levels = c("NetworkNews", "CableNews")
+)
+
+mntn_raw$NewsProgram <- factor(mntn_raw$NewsProgram, levels = c("Hardball", "SpecialReport", "WorldNewsTonight"))
+
+mntn_raw$TimePeriod <- factor(mntn_raw$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+mntn_raw$CaseStageCondensed <- fct_collapse(mntn_raw$CaseStage,
+  "PreDecision" = c(
+    "Cert", "PostCert",
+    "Argument", "PostArgument"),
+  "Decision" = "Decision",
+  "PostDecision" = "PostDecision"
+)
+
+mntn_raw$CaseStageCondensed <- factor(mntn_raw$CaseStageCondensed, levels = c("PreDecision", "Decision", "PostDecision"))
+
+mntn_raw$MentionContext <- factor(mntn_raw$MentionContext,
+                                levels = c("1", "2", "3"))
+
+mntn_raw$AnchorOnly <- as.numeric(as.character(mntn_raw$AnchorOnly))
+mntn_raw$Correspondent <- as.numeric(as.character(mntn_raw$Correspondent))
+mntn_raw$Debate <- as.numeric(as.character(mntn_raw$Debate))
+mntn_raw$NewsInterview <- as.numeric(as.character(mntn_raw$NewsInterview))
+
+mntn_raw$WordCountRAND <- as.numeric(mntn_raw$WordCountRAND)
+
+```
+
+```{r data-subsets, echo=FALSE}
+#Create new column with collapsed channel types
+df_channel_split <- mntn_raw %>%
+  mutate(ChannelTypeSplit = case_when(ChannelType == "CableNews" &  TimePeriod == "2000_2018" ~ "CableNews", ChannelType == "NetworkNews" &  TimePeriod == "2000_2018" ~ "NetworkNewsPost2000", ChannelType == "NetworkNews" &  TimePeriod == "1990_1999" ~ "NetworkNewsPre2000"))
+
+#Convert new column to factor
+ChannelTypeSplitLevels <- c("NetworkNewsPre2000","NetworkNewsPost2000","CableNews")
+
+df_channel_split$ChannelTypeSplit <- factor(df_channel_split$ChannelTypeSplit, levels = ChannelTypeSplitLevels, labels = ChannelTypeSplitLevels)
+
+#Robustness set with identical news mentions included only once
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" == "identical"
+df_channel_split_identical <- df_channel_split[df_channel_split$MultiMentionType == "Identical",]
+
+# Use the unique function to only keep the first instance of each "TranscriptID" for identicals
+df_channel_split_identical <- df_channel_split_identical[!duplicated(df_channel_split_identical$TranscriptID),]
+
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" != "identical"
+df_channel_split_non_identical <- df_channel_split[df_channel_split$MultiMentionType != "Identical",]
+
+# Concatenate the filtered dataframes
+df_channel_split_robust <- rbind(df_channel_split_non_identical, df_channel_split_identical)
+```
+
+```{r chisq-news-segment-format-functions, echo=FALSE}
+#Function for chisq pre-2000 & post-2000 network news ~ segment formats
+function_chisq_SegmentFormat_time <- function(df, news_var, SegmentFormat){
+  news_var <- sym(news_var)
+  SegmentFormat <- sym(SegmentFormat)
+  
+  x <- df %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var , !! SegmentFormat, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+function_chisq_SegmentFormat_channel <- function(df, news_var, SegmentFormat){
+  news_var <- sym(news_var)
+  SegmentFormat <- sym(SegmentFormat)
+
+  x <- df %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var, !!SegmentFormat, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+#Function for chisq cable programs ~ segment formats
+function_chisq_SegmentFormat_cable <- function(df, news_var, SegmentFormat){
+  news_var <- sym(news_var)
+  SegmentFormat <- sym(SegmentFormat)
+  
+  x <- df %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  mutate_if(is.numeric,as.factor) %>%
+  tabyl(!!news_var, !!SegmentFormat, show_missing_levels = FALSE) %>%
+  chisq.test(correct = FALSE)
+  
+  return(x)
+}
+
+#Function to print chisq results, observed values, expected values, and standardized residuals
+consolidate_chisq_results <- function(chisq_context_time, context_col) {
+  
+  observed <- chisq_context_time$observed
+  expected <- chisq_context_time$expected
+  stdres <- chisq_context_time$stdres
+  
+  # Dynamically get the name of the first column
+  first_col_name <- colnames(observed)[1]
+  
+  if (context_col == "Present") {
+    result_df <- data.frame(
+      FirstColumn = observed[, 1],
+      Observed_1 = observed[, 2],
+      Observed_2 = observed[, 3],
+      Expected_1 = expected[, 2],
+      Expected_2 = expected[, 3],
+      StdRes_1 = stdres[, 2],
+      StdRes_2 = stdres[, 3]
+    )
+  } else {
+    result_df <- data.frame(
+      FirstColumn = observed[, 1],
+      Observed_1 = observed[, 2],
+      Observed_2 = observed[, 3],
+      Observed_3 = observed[, 4],
+      Expected_1 = expected[, 2],
+      Expected_2 = expected[, 3],
+      Expected_3 = expected[, 4],
+      StdRes_1 = stdres[, 2],
+      StdRes_2 = stdres[, 3],
+      StdRes_3 = stdres[, 4]
+    )
+  }
+  
+  long_df <- result_df %>%
+    pivot_longer(
+      cols = starts_with("Observed") | starts_with("Expected") | starts_with("StdRes"),
+      names_to = c(".value", context_col),
+      names_pattern = "(Observed|Expected|StdRes)_(\\d+)"
+    ) %>%
+    select(FirstColumn, all_of(context_col), Observed, Expected, StdRes) %>%
+    rename_at(vars(FirstColumn), ~first_col_name)  # Rename 'FirstColumn' back to its original name
+  
+ long_df <- long_df %>%
+    mutate(
+      !!context_col := case_when(
+        context_col == "Present" ~ factor(!!sym(context_col), levels = c("1", "2"), labels = c("No", "Yes")),
+        context_col == "MentionContext" ~ factor(!!sym(context_col), levels = c("1", "2", "3"), labels = c("Same", "Related", "Different")),
+        context_col == "MntnLengthGroup" ~ factor(!!sym(context_col), levels = c("1", "2", "3"), labels = c("Short", "Medium", "Long")),
+        TRUE ~ as.factor(!!sym(context_col))
+      ),
+      Expected = round(Expected, digits = 2),
+      StdRes = round(StdRes, digits = 2)
+    )
+  
+  return(long_df)
+}
+
+```
+
+## Mention Context
+This compares the news mentions based on the context they were mentioned in: Same (1), Related (2), Different (3)
+
+### Network News Time Period
+Compares network news mentions from the 1990-1999 and 2000-2018 terms.
+```{r chisq-context-time, results='asis'}
+#Create contingency table for Channel Types and Mention Contexts 
+df_context_time_channel <- df_channel_split %>%
+  xtabs(~ MentionContext + ChannelTypeSplit, data = .)
+
+#Convert xtabs into matrix
+df_context_time_channel <- as.data.frame.matrix(df_context_time_channel) %>%
+#Transpose matrix
+  t() %>%
+#Convert into tibble, so that rownames become categorical variables (needed for tabyl) 
+  as_tibble(rownames = "ChannelTypeSplit") %>%
+#Convert to tabyl to use chisq
+  as_tabyl(df_context_time_channel, axes = 2) %>%
+#Convert ChannelTypeSplit to a factor
+  mutate(ChannelTypeSplit = factor(ChannelTypeSplit))
+
+#chissq test on filtered contingency tables
+chisq_context_time <- df_context_time_channel %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_time
+```
+
+
+```{r chisq-context-time-extra, include=FALSE}
+
+chisq_context_time_results <- consolidate_chisq_results(chisq_context_time, context_col = "MentionContext") %>%
+  group_by(MentionContext)%>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) %>%
+  tab_footnote(
+  footnote = "A = Pre-2000 Network News; B = Post-2000 Network News"
+)
+
+chisq_context_time_results
+```
+
+#### Robustness Check
+```{r chisq-context-time-robust, results = 'asis'}
+#Create contingency table for Channel Types and Mention Contexts 
+df_context_time_channel_robust <- df_channel_split_robust %>%
+  xtabs(~ MentionContext + ChannelTypeSplit, data = .)
+
+
+df_context_time_channel_robust <- as.data.frame.matrix(df_context_time_channel_robust) %>%
+  t() %>%
+#Convert into tibble, so that rownames become categorical variables (needed for tabyl) 
+  as_tibble(rownames = "ChannelTypeSplit") %>%
+  as_tabyl(df_context_time_channel, axes = 2) %>%
+  mutate(ChannelTypeSplit = factor(ChannelTypeSplit))
+
+#chissq
+chisq_context_time_robust <- df_context_time_channel_robust %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_time_robust
+    
+```
+
+
+### Channel Type
+Compares network and cable news mentions from the 2000-2018 terms.
+```{r chisq-context-channel, results='asis'}
+
+chisq_context_channel <- df_context_time_channel %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_channel
+```
+
+
+```{r chisq-context-channel-extra}
+
+chisq_context_channel_results <- consolidate_chisq_results(chisq_context_channel, context_col = "MentionContext") %>%
+  group_by(MentionContext)%>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) %>%
+  tab_footnote(
+  footnote = "A = Post-2000 Network News; B = Cable News"
+)
+
+chisq_context_channel_results
+```
+
+#### Robustness Check
+```{r chisq-context-channel-robust, results = 'asis'}
+
+chisq_context_channel_robust <- df_context_time_channel_robust %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_channel_robust
+```
+
+
+### Cable News Program
+Compares Hardball (MSNBC) and Special Report (Fox News) news mentions from 2000-2018 terms.
+
+```{r chisq-context-cable, results='asis'}
+#Create contingency table for Channel Types and Mention Contexts 
+df_context_cable <- df_channel_split %>%
+  xtabs(~ MentionContext + NewsProgram, data = .)
+
+#Convert xtabs into df, and transpose df so that News Programs are the rows and mention contexts are the columns
+df_context_cable <- as.data.frame.matrix(df_context_cable) %>%
+  t() %>%
+  as_tibble(rownames = "NewsProgram") %>%
+  mutate(NewsProgram = factor(NewsProgram))
+
+#df as tabyl so chisq.test works
+df_context_cable <- as_tabyl(df_context_cable, axes = 2)
+
+#chissq test on filtered contingency tables
+chisq_context_cable <- df_context_cable %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_cable
+```
+
+```{r chisq-context-cable-extra}
+
+chisq_context_cable_results <- consolidate_chisq_results(chisq_context_cable, context_col = "MentionContext") %>%
+  group_by(MentionContext)%>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) %>%
+  tab_footnote(
+  footnote = "A = Hardball; B = Special Report"
+)
+
+chisq_context_cable_results
+
+```
+
+#### Robustness Check
+```{r chisq-context-cable-robust, results = 'asis'}
+#Create contingency table for Channel Types and Mention Contexts 
+df_context_cable_robust <- df_channel_split_robust %>%
+  xtabs(~ MentionContext + NewsProgram, data = .)
+
+#Convert xtabs into df, and transpose df so that News Programs are the rows and mention contexts are the columns
+df_context_cable_robust <- as.data.frame.matrix(df_context_cable_robust) %>%
+  t() %>%
+  as_tibble(rownames = "NewsProgram") %>%
+  mutate(NewsProgram = factor(NewsProgram))
+
+#df as tabyl so chisq.test works
+df_context_cable_robust <- as_tabyl(df_context_cable_robust, axes = 2)
+
+#chissq test on filtered contingency tables
+chisq_context_cable_robust <- df_context_cable_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  chisq.test(correct = FALSE)
+
+chisq_context_cable_robust
+
+```
+
+## Segment Format
+
+This compares the number of news mentions that include one of four segment formats: anchor-only, correspondent, debate, and news interview. News mentions were coded for the presence and absence of each format.
+
+### Network News Time Period
+Compares network news mentions from the 1990-1999 and 2000-2018 terms.
+
+**Anchor-Only**
+```{r chisq-format-anchor-time, results='asis'}
+#Chi-Squared for pre-2000 and post-2000 network news ~ news segment format
+##Anchor Segments
+chisq_anchor_time <- function_chisq_SegmentFormat_time(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_time
+```
+
+```{r chisq-format-anchor-time-extra, include=FALSE}
+chisq_anchor_time_results <- consolidate_chisq_results(chisq_anchor_time, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_anchor_time_results
+
+```
+
+**Correspondent**
+```{r chisq-format-correspondent-time, results='asis'}
+##Correspondent Segments
+chisq_correspondent_time <- function_chisq_SegmentFormat_time(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "Correspondent")
+
+chisq_correspondent_time
+
+```
+
+
+```{r chisq-format-correspondent-time-extra, include=FALSE}
+chisq_correspondent_time_results <- consolidate_chisq_results(chisq_correspondent_time, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_correspondent_time_results
+
+```
+
+**News Interview**
+```{r chisq-format-interview-time, results='asis'}
+##News Interview Segments
+chisq_interview_time <- function_chisq_SegmentFormat_time(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "NewsInterview")
+
+chisq_interview_time
+```
+
+```{r chisq-format-interview-time-extra, include=FALSE}
+
+chisq_interview_time_results <- consolidate_chisq_results(chisq_interview_time, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_interview_time_results
+```
+
+#### Robustness Check
+
+**Anchor-Only**
+```{r chisq-format-anchor-time-robust, results = 'asis'}
+#Chi-Squared for pre-2000 and post-2000 network news ~ news segment format
+##Anchor Segments
+chisq_anchor_time_robust <- function_chisq_SegmentFormat_time(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_time_robust
+```
+
+**Correspondent**
+```{r chisq-format-correspondent-time-robust, results = 'asis'}
+##Correspondent Segments
+chisq_correspondent_time_robust <- function_chisq_SegmentFormat_time(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "Correspondent")
+
+chisq_correspondent_time_robust
+```
+
+**News Interview**
+```{r chisq-format-interview-time-robust, include = FALSE, eval = FALSE}
+##News Interview Segments
+chisq_interview_time_robust <- function_chisq_SegmentFormat_time(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "NewsInterview")
+
+chisq_interview_time_robust
+```
+
+### Channel Type
+Compares network and cable news mentions from the 2000-2018 terms.
+
+**Anchor-Only**
+```{r chisq-format-anchor-channel, results='asis'}
+#Chi-Squared for post-2000 network news and cable news ~ news segment format
+##Anchor Segments
+chisq_anchor_channel <- function_chisq_SegmentFormat_channel(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_channel
+
+```
+
+```{r chisq-format-anchor-channel-extra}
+chisq_anchor_channel_results <- consolidate_chisq_results(chisq_anchor_channel, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_anchor_channel_results
+```
+
+**Correspondent**
+```{r chisq-format-correspondent-channel, results='asis'}
+##Correspondent Segments
+chisq_correspondent_channel <- function_chisq_SegmentFormat_channel(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "Correspondent")
+
+chisq_correspondent_channel
+```
+
+```{r chisq-format-correspondent-channel-extra}
+
+chisq_correspondent_channel_results <- consolidate_chisq_results(chisq_correspondent_channel, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_correspondent_channel_results
+
+```
+
+**News Interview**
+```{r chisq-format-interview-channel, results='asis'}
+##News Interview Segments
+chisq_interview_channel <- function_chisq_SegmentFormat_channel(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "NewsInterview")
+
+chisq_interview_channel
+```
+
+
+```{r chisq-format-interview-channel-extra}
+
+chisq_interview_channel_results <- consolidate_chisq_results(chisq_interview_channel, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_interview_channel_results
+
+```
+
+**Debate**
+```{r chisq-format-debate-channel, results='asis'}
+##Panel and Debate Segments
+chisq_debate_channel <- function_chisq_SegmentFormat_channel(df_channel_split, news_var = "ChannelTypeSplit", SegmentFormat = "Debate")
+
+chisq_debate_channel
+```
+
+
+```{r chisq-format-debate-channel-extra}
+chisq_debate_channel_results <- consolidate_chisq_results(chisq_debate_channel, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_debate_channel_results
+```
+
+
+#### Robustness Check
+
+**Anchor-Only**
+```{r chisq-format-anchor-channel-robust, results = 'asis'}
+#Chi-Squared for post-2000 network news and cable news ~ news segment format
+##Anchor Segments
+chisq_anchor_channel_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_channel_robust
+```
+
+**Correspondent**
+```{r chisq-format-correspondent-channel-robust, results = 'asis'}
+##Correspondent Segments
+chisq_correspondent_channel_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "Correspondent")
+
+chisq_correspondent_channel_robust
+```
+
+**News Interview**
+```{r chisq-format-interview-channel-robust, results = 'asis'}
+##News Interview Segments
+chisq_interview_channel_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "NewsInterview")
+
+chisq_interview_channel_robust
+```
+
+**Debate**
+```{r chisq-format-debate-channel-robust, results = 'asis'}
+##Panel and Debate Segments
+chisq_debate_channel_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "ChannelTypeSplit", SegmentFormat = "Debate")
+
+chisq_debate_channel_robust
+```
+
+### Cable News Program
+Compares Hardball (MSNBC) and Special Report (Fox News) mentions from the 2000-2018 terms.
+
+**Anchor**
+```{r chisq-anchor-cable, results='asis'}
+#Chi-Squared for Hardball and Special Report ~ news segment format
+##Anchor Segments
+chisq_anchor_cable <- function_chisq_SegmentFormat_cable(df_channel_split, news_var = "NewsProgram", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_cable
+
+```
+
+
+```{r chisq-anchor-cable-extra}
+chisq_anchor_cable_results <- consolidate_chisq_results(chisq_anchor_cable, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_anchor_cable_results
+
+```
+
+**Correspondent**
+```{r chisq-correspondent-cable, results='asis'}
+##Correspondent Segments
+chisq_correspondent_cable <- function_chisq_SegmentFormat_cable(df_channel_split, news_var = "NewsProgram", SegmentFormat = "Correspondent")
+
+chisq_correspondent_cable
+```
+
+
+```{r chisq-correspondent-cable-extra}
+chisq_correspondent_cable_results <- consolidate_chisq_results(chisq_correspondent_cable, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_correspondent_cable_results
+```
+
+**News Interview**
+```{r chisq-interview-cable, results='asis'}
+##News Interview Segments
+chisq_interview_cable <- function_chisq_SegmentFormat_cable(df_channel_split, news_var = "NewsProgram", SegmentFormat = "NewsInterview")
+
+chisq_interview_cable
+```
+
+```{r chisq-interview-cable-extra}
+chisq_interview_cable_results <- consolidate_chisq_results(chisq_interview_cable, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_interview_cable_results
+```
+
+**Debate**
+```{r chisq-debate-cable, results='asis'}
+##Panel and Debate Segments
+chisq_debate_cable <- function_chisq_SegmentFormat_cable(df_channel_split, news_var = "NewsProgram", SegmentFormat = "Debate")
+
+chisq_debate_cable
+```
+
+
+```{r chisq-debate-cable-extra}
+chisq_debate_cable_results <- consolidate_chisq_results(chisq_debate_cable, context_col = "Present") %>%
+  group_by(Present) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_debate_cable_results
+```
+
+#### Robustness Check
+**Anchor-Only**
+```{r chisq-format-anchor-cable-robust, results = 'asis'}
+#Chi-Squared for post-2000 network news and cable news ~ news segment format
+##Anchor Segments
+chisq_anchor_cable_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "NewsProgram", SegmentFormat = "AnchorOnly")
+
+chisq_anchor_cable_robust
+```
+
+**Correspondent**
+```{r chisq-format-correspondent-cable-robust, results = 'asis'}
+##Correspondent Segments
+chisq_correspondent_cable_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "NewsProgram", SegmentFormat = "Correspondent")
+
+chisq_correspondent_cable_robust
+```
+
+**News Interview**
+```{r chisq-format-interview-cable-robust, results = 'asis'}
+##News Interview Segments
+chisq_interview_cable_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "NewsProgram", SegmentFormat = "NewsInterview")
+
+chisq_interview_cable_robust
+```
+
+**Debate**
+```{r chisq-format-debate-cable-robust, results = 'asis'}
+##Panel and Debate Segments
+chisq_debate_cable_robust <- function_chisq_SegmentFormat_channel(df_channel_split_robust, news_var = "NewsProgram", SegmentFormat = "Debate")
+
+chisq_debate_cable_robust
+```
+
+## News Mention Length
+
+This compares the share of news mentions based on their length: short (< 30 seconds), medium (> 30 seconds & < 2 minutes), long (> 2 minutes).
+
+### Network News Time Period
+Compares network news mentions from the 1990-1999 and 2000-2018 terms.
+```{r chisq-mention-length-time, results='asis'}
+#How long were Supreme Court case mentions on cable programs?
+##Convert word count to seconds based on 135 words per 60 seconds/2.25 words per second (Edwards III & Howell, 2011, p. 258). Categorize mention length: short (shorter than 30 seconds), medium (31 seconds to 120 seconds), or long (longer than 120 seconds)
+
+  mntn_length <- df_channel_split %>%
+  mutate(MntnLengthSeconds = WordCountRAND/2.25) %>% 
+  mutate(MntnLengthSeconds = round(MntnLengthSeconds, digits = 0)) %>%
+  mutate(MntnLengthGroup = case_when(MntnLengthSeconds >= 120 ~ "Long",
+                                     MntnLengthSeconds >= 30 ~ "Medium",
+                                     MntnLengthSeconds < 30 ~ "Short")) %>%
+  mutate(MntnLengthGroup = factor(.$MntnLengthGroup, 
+                                  levels = c("Short", "Medium", "Long")))
+
+##Contingency table ChannelTypeSplit ~ Mention Length
+contingency_mntn_length_channel_time <-  mntn_length %>%
+  tabyl(ChannelTypeSplit, MntnLengthGroup) 
+
+chisq_mntn_length_time <- contingency_mntn_length_channel_time %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_time
+```
+
+
+```{r chisq-mention-length-time-extra, include=FALSE}
+chisq_mntn_length_time_results <- consolidate_chisq_results(chisq_mntn_length_time, context_col = "MntnLengthGroup") %>%
+  group_by(MntnLengthGroup) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_mntn_length_time_results
+```
+
+#### Robustness Check
+
+```{r chisq-mention-length-time-robust, results = 'asis'}
+#How long were Supreme Court case mentions on cable programs?
+##Convert word count to seconds based on 135 words per 60 seconds/2.25 words per second (Edwards III & Howell, 2011, p. 258). Categorize mention length: short (shorter than 30 seconds), medium (31 seconds to 120 seconds), or long (longer than 120 seconds)
+mntn_length_robust <- df_channel_split_robust %>%
+  mutate(MntnLengthSeconds = WordCountRAND / 2.25) %>% 
+  mutate(MntnLengthSeconds = round(MntnLengthSeconds, digits = 0)) %>%
+  mutate(MntnLengthGroup = case_when(MntnLengthSeconds >= 120 ~ "Long",
+                                     MntnLengthSeconds >= 30 ~ "Medium",
+                                     MntnLengthSeconds < 30 ~ "Short")) %>%
+  mutate(MntnLengthGroup = factor(.$MntnLengthGroup, 
+                                  levels = c("Short", "Medium", "Long")))
+
+##Contingency table ChannelTypeSplit ~ Mention Length
+contingency_mntn_length_channel_time_robust <-  mntn_length_robust %>%
+  tabyl(ChannelTypeSplit, MntnLengthGroup) 
+
+chisq_mntn_length_time_robust <- contingency_mntn_length_channel_time_robust %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_time_robust
+```
+
+### Channel Type
+Compares network and cable news mentions from the 2000-2018 terms.
+```{r chisq-mention-length-channel, results='asis'}
+chisq_mntn_length_channel <-  contingency_mntn_length_channel_time %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_channel
+```
+
+
+```{r chisq-mention-length-channel-extra, include=FALSE}
+chisq_mntn_length_channel_results <- consolidate_chisq_results(chisq_mntn_length_channel, context_col = "MntnLengthGroup") %>%
+  group_by(MntnLengthGroup) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_mntn_length_channel_results
+```
+
+#### Robustness Check
+
+```{r chisq-mention-length-channel-robust, results = 'asis'}
+chisq_mntn_length_channel_robust <-  contingency_mntn_length_channel_time_robust %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_channel_robust
+```
+
+
+**Total time spent discussing Supreme Court cases.**  
+This was calculated on a robust sample, including only one instance of identical mentions.
+```{r mention-length-total-channel-time}
+#Total amount of time spent on SC cases by news sector
+df_mntn_length_total_robust <- mntn_length_robust %>%
+  group_by(ChannelTypeSplit) %>%
+  summarise(MntnLengthTotal = sum(MntnLengthSeconds)) %>%
+  mutate(MntnLengthTotal = lubridate::seconds_to_period(MntnLengthTotal)) %>%
+  gt()
+
+df_mntn_length_total_robust
+```
+
+### Cable News Program
+This compares cable news mentions from the 2000-2018 terms.
+```{r chisq-mention-length-cable, results='asis'}
+#How long were Supreme Court case mentions on cable programs?
+##Contingency table Channel Type ~ Story Length
+contingency_mntn_length_cable <-  mntn_length %>%
+  tabyl(NewsProgram, MntnLengthGroup) 
+
+chisq_mntn_length_cable <- contingency_mntn_length_cable %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_cable
+```
+
+
+```{r chisq-mention-length-cable-extra}
+chisq_mntn_length_cable_results <- consolidate_chisq_results(chisq_mntn_length_cable, context_col = "MntnLengthGroup") %>%
+  group_by(MntnLengthGroup) %>%
+  gt() %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()) 
+
+chisq_mntn_length_cable_results
+```
+
+#### Robustness Check
+**Mention Length by Group**
+```{r chisq-mention-length-cable-robust, results = 'asis'}
+#How long were Supreme Court case mentions on cable programs?
+##Contingency table Channel Type ~ Story Length
+contingency_mntn_length_cable_robust <-  mntn_length_robust %>%
+  tabyl(NewsProgram, MntnLengthGroup) 
+
+chisq_mntn_length_cable_robust <- contingency_mntn_length_cable_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  chisq.test(correct = FALSE)
+
+chisq_mntn_length_cable_robust
+```
+
+**Total time spent discussing Supreme Court cases.**  
+This was calculated on a robust sample, including only one instance of identical mentions.
+```{r chisq-mention-length-total-cable-robust}
+#Total amount of time spent on SC cases by news sector
+MntnLengthTotal_cable <- mntn_length_robust %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  group_by(NewsProgram) %>%
+  summarise(MntnLengthTotal = sum(MntnLengthSeconds))  %>%
+  mutate(MntnLengthTotal = lubridate::seconds_to_period(MntnLengthTotal)) %>%
+  gt()
+
+MntnLengthTotal_cable
+```
+
+```{r doodles, include = FALSE, eval = FALSE}
+mntn_length %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000", MntnLengthGroup == "Short") %>%
+  summary()
+
+mntn_length %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000", MentionContext == 1) %>%
+  summary()
+
+#Quick visual to help me make sense of the data
+mntn_length %>%
+    pivot_longer(cols = AnchorOnly:NewsInterview,
+               names_to = "SegmentFormat",
+               values_to = "value") %>%
+  filter(ChannelTypeSplit == "CableNews", value == 1) %>%
+ggbarstats(x = SegmentFormat, y = MntnLengthGroup, type = "np", label = "counts")
+
+
+mntn_length %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+ggbarstats(x = MentionContext, y = MntnLengthGroup, type = "np")
+
+mntn_length %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000") %>%
+ggbarstats(x = MentionContext, y = MntnLengthGroup, type = "np")
+
+#Chisq for cable news mentions by length and mention context
+contingency_cable_mntn_length_segment_topic <-  mntn_length %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  tabyl(MntnLengthGroup, MentionContext) 
+
+chisq_cable_mntn_length_segment_topic <- contingency_cable_mntn_length_segment_topic %>%
+  chisq.test(correct = FALSE)
+
+chisq_cable_mntn_length_segment_topic$expected
+chisq_cable_mntn_length_segment_topic$stdres
+
+mntn_length %>%
+    pivot_longer(cols = AnchorOnly:NewsInterview,
+               names_to = "SegmentFormat",
+               values_to = "value") %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000", value == 1) %>%
+ggbarstats(x = SegmentFormat, y = MntnLengthGroup, type = "np", label = "counts")
+
+mntn_length %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000") %>%
+  ggbarstats(x = MntnLengthGroup, y = MentionContext, type = "np", label = "both")
+
+#mntn_length %>%
+  #filter(ChannelTypeSplit == "CableNews") %>%
+ # ggbetweenstats(x = MentionContext, y = MntnLengthSeconds, type = "np", xlab = "Thematic Context") +
+ # scale_color_manual(values = pal_MentionContext)
+
+ggsave("boxplot_length_context_cable.svg", width = 6.3, height = 4.72)
+
+
+mntn_length %>%
+    pivot_longer(cols = AnchorOnly:NewsInterview,
+               names_to = "SegmentFormat",
+               values_to = "value") %>%
+  filter(ChannelTypeSplit == "CableNews", value == 1) %>%
+grouped_ggbarstats(x = SegmentFormat, y = MntnLengthGroup, grouping.var = MentionContext, type = "np", label = "both")
+
+#Cable Shows by Context and Format
+#Create contingency table of segment format by mention context by news program
+df_SegmentFormat_context_cable <- df_channel_split %>%
+#Pivot df to long format
+  pivot_longer(cols = AnchorOnly:NewsInterview,
+               names_to = "SegmentFormat",
+               values_to = "value") %>%
+ #Reorder the segment format levels
+  mutate(SegmentFormat = factor(SegmentFormat, levels = c("AnchorOnly", "Correspondent", "NewsInterview", "Debate"))) %>%
+#Filter out World News from NewsProgram
+  filter(NewsProgram != "WorldNewsTonight") %>%
+#Drop World News from factor, otherwise it's in the table
+  mutate(NewsProgram = fct_drop(NewsProgram))%>%
+#Create table
+  xtabs(value ~ NewsProgram + SegmentFormat + MentionContext, data = .)
+
+#Convert xtabs to dataframe
+df_SegmentFormat_context_cable <- as.data.frame(df_SegmentFormat_context_cable)
+
+```

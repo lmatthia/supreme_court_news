@@ -1,0 +1,1286 @@
+---
+title: "NewsVolume Stats"
+author: "Lisa Matthias"
+date: "24 9 2023"
+output: 
+    html_document: 
+      theme: readable
+      toc: yes
+      toc_float: yes
+      code_folding: hide
+---
+
+```{r setup, echo=FALSE}
+#set up global R to display 3 digits (0.000)
+options(digits = 3)
+
+#set up knit r global
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  echo = TRUE,
+  fig.width = 6,
+  fig.asp = 0.618,
+  out.width = "90%",
+  fig.align = "left",
+  dpi = 300)
+```
+
+```{r packages, echo=FALSE}
+library(datawizard)
+library(gt)
+library(janitor)
+library(rcompanion)
+library(rstatix)
+library(tidyr)
+library(tidyverse)
+```
+
+```{r main-data, echo=FALSE}
+# Read the local copy. Call this "mntn_raw"
+mntn_raw <- read.csv("data/NewsMentionSample.csv")
+
+# Read the local copy. Call this "cases_raw"
+cases_raw <- read.csv("data/SupremeCourtCaseIndex.csv")
+```
+
+```{r variable-transformation, echo=FALSE}
+# Set factor levels and labels
+IssueAreaLevels <- c(
+  "Abortion", "EconomicActivity",
+  "FirstAmendment",
+  "SexDiscrimination"
+)
+
+CaseStageLevels <- c(
+  "Cert", "PostCert", "Argument",
+  "PostArgument", "Decision",
+  "PostDecision"
+)
+
+ChannelTypeLevels <- c("NetworkNews", "CableNews")
+
+TimePeriodLevels <- c("2000_2018", "1990_1999")
+
+# Mutate columns in mntn_raw
+mntn_raw$IssueArea <- factor(mntn_raw$IssueArea,
+  levels = IssueAreaLevels
+)
+
+cases_raw$IssueArea <- factor(cases_raw$IssueArea,
+  levels = IssueAreaLevels)
+
+mntn_raw$CaseStage <- factor(mntn_raw$CaseStage,
+  levels = CaseStageLevels
+)
+
+mntn_raw$ChannelType <- factor(mntn_raw$ChannelType,
+  levels = c("NetworkNews", "CableNews")
+)
+
+mntn_raw$NewsProgram <- factor(mntn_raw$NewsProgram, levels = c("Hardball", "SpecialReport", "WorldNewsTonight"))
+
+mntn_raw$TimePeriod <- factor(mntn_raw$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+cases_raw$TimePeriod <- factor(cases_raw$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+mntn_raw$CaseStageCondensed <- fct_collapse(mntn_raw$CaseStage,
+  "PreDecision" = c(
+    "Cert", "PostCert",
+    "Argument", "PostArgument"),
+  "Decision" = "Decision",
+  "PostDecision" = "PostDecision"
+)
+
+mntn_raw$CaseStageCondensed <- factor(mntn_raw$CaseStageCondensed, levels = c("PreDecision", "Decision", "PostDecision"))
+```
+
+```{r data-subsets, echo=FALSE}
+#Create new column with collapsed channel types
+df_channel_split <- mntn_raw %>%
+  mutate(ChannelTypeSplit = case_when(ChannelType == "CableNews" &  TimePeriod == "2000_2018" ~ "CableNews", ChannelType == "NetworkNews" &  TimePeriod == "2000_2018" ~ "NetworkNewsPost2000", ChannelType == "NetworkNews" &  TimePeriod == "1990_1999" ~ "NetworkNewsPre2000"))
+
+#Convert new column to factor
+ChannelTypeSplitLevels <- c("NetworkNewsPre2000","NetworkNewsPost2000","CableNews")
+
+df_channel_split$ChannelTypeSplit <- factor(df_channel_split$ChannelTypeSplit, levels = ChannelTypeSplitLevels, labels = ChannelTypeSplitLevels)
+
+#Robustness set with identical news mentions included only once
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" == "identical"
+df_channel_split_identical <- df_channel_split[df_channel_split$MultiMentionType == "Identical",]
+
+# Use the unique function to only keep the first instance of each "TranscriptID" for identicals
+df_channel_split_identical <- df_channel_split_identical[!duplicated(df_channel_split_identical$TranscriptID),]
+
+# Create a new dataframe that only includes entries with "MultiMentionMentionType" != "identical"
+df_channel_split_non_identical <- df_channel_split[df_channel_split$MultiMentionType != "Identical",]
+
+# Concatenate the filtered dataframes
+df_channel_split_robust <- rbind(df_channel_split_non_identical, df_channel_split_identical)
+```
+
+```{r contingency-tables-chisq-functions, echo=FALSE}
+#Create function for contingency table. var1 for rows, var2 for columns. "filter" for robustness check. filter == "NA" for full dataset.
+function_contingency_table <- function(df, var1, var2, filter) {
+  table <- df %>%
+  tabyl({{ var1 }}, {{ var2 }})
+  if(filter == "NA") return(table)
+  
+  if(filter != "NA") table <- table[, !(names(table) %in% filter), ]
+  return(table)
+}
+
+function_rowwise_chisq <- function(contingency_table, var1, var2){
+  
+  # Compute chi-squared test results
+  chisq_results <- contingency_table %>%
+        rowwise() %>%
+    mutate(
+      p_values = case_when(
+        var1 == "NetworkNewsPre2000" | var1 == "NetworkNewsPost2000" ~ list(c(0.33, 0.67)),
+        var1 == "Hardball" | var1 == "CableNews" ~ list(c(0.5, 0.5))
+      ),
+      test_stat = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$statistic,
+      parameter = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$parameter,
+      p_val = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$p.value
+    ) %>%
+    select(1, var1, var2, test_stat, parameter, p_val) # 1 refers to the first column regardless of its name
+  
+  chisq_extra <- contingency_table %>%
+  rowwise() %>%
+     mutate(p_values = case_when(
+        var1 == "NetworkNewsPre2000" | var1 == "NetworkNewsPost2000" ~ list(c(0.33, 0.67)),
+        var1 == "Hardball" | var1 == "CableNews" ~ list(c(0.5, 0.5))
+      ),
+    expected = list(chisq.test(c(.data[[var1]], .data[[var2]]), correct = FALSE, p = unlist(p_values))$expected),
+   std_res =list(chisq.test(c(.data[[var1]], .data[[var2]]), correct = FALSE,p = unlist(p_values))$stdres))  %>%
+    select(1, var1, var2, expected, std_res) # 1 refers to the first column regardless of its name
+
+  chisq_complete <- left_join(chisq_results, chisq_extra) 
+  
+  chisq_complete <- chisq_complete %>% 
+    relocate(expected, .after = var2) %>%
+    relocate(std_res, .after = expected) %>%
+  mutate(expected = list(round(expected, digits = 2)),
+      std_res = list(round(std_res, digits = 2)),
+      test_stat = list(round(test_stat, digits = 2)),
+      p_val = list(scales::pvalue(p_val,
+               accuracy = 0.001, 
+               decimal.mark = ".", 
+               add_p = FALSE)))
+    
+  
+  return(chisq_complete)
+}
+
+function_rowwise_chisq_unique_cases <- function(contingency_table, var1, var2) {
+  
+  contingency_table_new <- contingency_table %>%
+    rowwise() %>% mutate(
+    p_values = case_when(
+        var1 == "NetworkNewsPre2000" & IssueArea == "Abortion" ~ list(c(0.4608, 0.5392)),
+        var1 == "NetworkNewsPre2000" & IssueArea == "EconomicActivity" ~ list(c(0.3584, 0.6416)),
+        var1 == "NetworkNewsPre2000" & IssueArea == "FirstAmendment" ~ list(c(0.3846, 0.6154)),
+        var1 == "NetworkNewsPre2000" & IssueArea == "SexDiscrimination" ~ list(c(0.4329, 0.5671)),
+        var1 == "NetworkNewsPre2000" ~ list(c(0.3704, 0.6296)),  # Default p values for NetworkNewsPre2000
+        var1 == "NetworkNewsPost2000" | var1 == "Hardball" ~ list(c(0.5, 0.5)) # Default for NetworkNewsPost2000 and Hardball
+      ))
+   
+  chisq_results <- contingency_table_new %>%
+    rowwise() %>% 
+    mutate(
+      test_stat = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$statistic,
+      parameter = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$parameter,
+      p_val = chisq.test(c(.data[[var1]], .data[[var2]]), p = unlist(p_values))$p.value
+    ) %>%
+    select(1, var1, var2, test_stat, parameter, p_val) # 1 refers to the first column regardless of its name
+  
+  chisq_extra <- contingency_table_new %>%
+  rowwise() %>%
+     mutate(expected = list(chisq.test(c(.data[[var1]], .data[[var2]]), correct = FALSE, p = unlist(p_values))$expected),
+   std_res =list(chisq.test(c(.data[[var1]], .data[[var2]]), correct = FALSE,p = unlist(p_values))$stdres))  %>%
+    select(1, var1, var2, expected, std_res) # 1 refers to the first column regardless of its name
+
+  chisq_complete <- left_join(chisq_results, chisq_extra) 
+  
+  chisq_complete <- chisq_complete %>% 
+    relocate(expected, .after = var2) %>%
+    relocate(std_res, .after = expected) %>%
+  mutate(expected = list(round(expected, digits = 2)),
+      std_res = list(round(std_res, digits = 2)),
+      test_stat = list(round(test_stat, digits = 2)),
+       p_val = list(scales::pvalue(p_val,
+               accuracy = 0.001, 
+               decimal.mark = ".", 
+               add_p = FALSE)))
+    
+  
+  
+  
+  return(chisq_complete)
+  
+}
+
+#Function to print chisq results, observed values, expected values, and standardized residuals
+function_chisq_results <- function(chisq_df){
+  cat("\nChi-squared Test Results:\n")
+  print(chisq_df)
+  
+  cat("\nObserved Values:\n")
+  print(chisq_df$observed)
+  
+  cat("\nExpected Values:\n")
+  print(chisq_df$expected)
+  
+  cat("\nStandardized Residuals:\n")
+  print(chisq_df$stdres)
+  
+  return()
+}
+
+
+consolidate_chisq_results <- function(chisq_context_time, context_col) {
+  
+  observed <- chisq_context_time$observed
+  expected <- chisq_context_time$expected
+  stdres <- chisq_context_time$stdres
+  
+  # Dynamically get the name of the first column
+  first_col_name <- colnames(observed)[1]
+  
+  if (context_col == "Present") {
+    result_df <- data.frame(
+      FirstColumn = observed[, 1],
+      Observed_1 = observed[, 2],
+      Observed_2 = observed[, 3],
+      Expected_1 = expected[, 2],
+      Expected_2 = expected[, 3],
+      StdRes_1 = stdres[, 2],
+      StdRes_2 = stdres[, 3]
+    )
+  } else {
+    result_df <- data.frame(
+      FirstColumn = observed[, 1],
+      Observed_1 = observed[, 2],
+      Observed_2 = observed[, 3],
+      Observed_3 = observed[, 4],
+      Expected_1 = expected[, 2],
+      Expected_2 = expected[, 3],
+      Expected_3 = expected[, 4],
+      StdRes_1 = stdres[, 2],
+      StdRes_2 = stdres[, 3],
+      StdRes_3 = stdres[, 4]
+    )
+  }
+  
+  long_df <- result_df %>%
+    pivot_longer(
+      cols = starts_with("Observed") | starts_with("Expected") | starts_with("StdRes"),
+      names_to = c(".value", context_col),
+      names_pattern = "(Observed|Expected|StdRes)_(\\d+)"
+    ) %>%
+    select(FirstColumn, all_of(context_col), Observed, Expected, StdRes) %>%
+    rename_at(vars(FirstColumn), ~first_col_name)  # Rename 'FirstColumn' back to its original name
+  
+ long_df <- long_df %>%
+    mutate(
+      !!context_col := case_when(
+        context_col == "Present" ~ factor(!!sym(context_col), levels = c("1", "2"), labels = c("No", "Yes")),
+        context_col == "MentionContext" ~ factor(!!sym(context_col), levels = c("1", "2", "3"), labels = c("Same", "Related", "Different")),
+        context_col == "MntnLengthGroup" ~ factor(!!sym(context_col), levels = c("1", "2", "3"), labels = c("Short", "Medium", "Long")),
+        TRUE ~ as.factor(!!sym(context_col))
+      ),
+      Expected = round(Expected, digits = 2),
+      StdRes = round(StdRes, digits = 2)
+    )
+  
+  return(long_df)
+}
+
+```
+
+## Number of Supreme Court News Mentions  
+This compares the news samples based on the number of news mentions in total, by issue area, and case stage. Different time frames and number of shows were accounted for and expected values adjusted accordingly.
+
+### Network News Time Period  
+
+**In total**  
+
+```{r chisq-number-mentions-network-time-period}
+#Contingency tables and chi-square test for total sum of case mentions on Network News Pre- and Post-Cable
+contingency_network_total <-  df_channel_split %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  group_by(ChannelTypeSplit) %>%
+  tally() %>%
+  data_transpose(colnames = TRUE)
+
+chisq_network_total <- function_rowwise_chisq(contingency_network_total, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+
+chisq_network_total_results <- gt(chisq_network_total)
+
+chisq_network_total_results
+```
+
+**By Issue Area**  
+Abortion, Economic Activity, First Amendment, Sex Discrimination  
+
+```{r chisq-number-mentions-network-time-period-issue}
+#Contingency tables and chi-square test for Network News Pre- and Post-Cable by Issue Area
+contingency_network_issue_areas <- function_contingency_table(df_channel_split, IssueArea, ChannelTypeSplit, filter = "CableNews")
+
+chisq_network_issue_areas <- function_rowwise_chisq(contingency_network_issue_areas, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+chisq_network_issue_areas_results <- gt(chisq_network_issue_areas) 
+
+chisq_network_issue_areas_results
+
+```
+
+**By Case Stage**  
+This compares the number of news mentions before the Court's decision (Pre-Decision), of the decision day (Decision), and any time after the decision (Post-Decision)
+
+```{r chisq-number-mentions-network-time-period-case-stage}
+#Contingency tables and chi-square test for Network News Pre- and Post-Cable by Case Stage
+contingency_network_case_stages <- function_contingency_table(df_channel_split, CaseStageCondensed, ChannelTypeSplit, filter = "CableNews")
+
+chisq_network_case_stages <- function_rowwise_chisq(contingency_network_case_stages, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+
+chisq_network_case_stages_result <- gt(chisq_network_case_stages)
+
+chisq_network_case_stages_result
+
+```
+
+
+
+#### Robustness check  
+
+**In total**  
+
+```{r chisq-number-mentions-network-time-period-robust, results='asis'}
+#Contingency tables and chi-square test for total sum of case mentions on Network News Pre- and Post-Cable
+contingency_network_total_robust <-  df_channel_split_robust %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+  group_by(ChannelTypeSplit) %>%
+  tally() %>%
+  data_transpose(colnames = TRUE)
+
+chisq_network_total_robust <- function_rowwise_chisq(contingency_network_total_robust, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+chisq_network_total_robust_result <- gt(chisq_network_total_robust)
+
+chisq_network_total_robust_result
+```
+
+
+**By Issue Area.**  
+
+```{r chisq-number-mentions-network-time-period-issue-robust}
+#Contingency tables and chi-square test for Network News Pre- and Post-Cable by Issue Area
+contingency_network_issue_areas_robust <- function_contingency_table(df_channel_split_robust, IssueArea, ChannelTypeSplit, filter = "CableNews")
+
+chisq_network_issue_areas_robust <- function_rowwise_chisq(contingency_network_issue_areas_robust, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+chisq_network_issue_areas_robust_results <- chisq_network_issue_areas_robust %>%
+  gt()
+
+chisq_network_issue_areas_robust_results
+
+```
+
+
+**By Case Stage.**  
+
+```{r chisq-number-mentions-network-time-period-stage-robust}
+#Contingency tables and chi-square test for Network News Pre- and Post-Cable by Case Stage
+contingency_network_case_stages_robust <- function_contingency_table(df_channel_split_robust, CaseStageCondensed, ChannelTypeSplit, filter = "CableNews")
+
+chisq_network_case_stages_robust <- function_rowwise_chisq(contingency_network_case_stages_robust, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+chisq_network_case_stages_robust_results <- chisq_network_case_stages_robust %>%
+  gt()
+
+chisq_network_case_stages_robust_results
+```
+
+
+### Channel Type  
+Compares the number of news mentions of network and cable news during the Court's 2000-2018 terms.  
+
+**In total**  
+
+```{r chisq-number-mentions-channel-type}
+#Contingency tables and chi-square test for total sum of case mentions on Network News Post-Cable and Cable News
+contingency_channel_type_total <-  df_channel_split %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  group_by(ChannelTypeSplit) %>%
+  tally() %>%
+  datawizard::data_transpose(colnames = TRUE)
+
+chisq_channel_type_total <- function_rowwise_chisq(contingency_channel_type_total, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+chisq_channel_type_total_results <- gt(chisq_channel_type_total)
+
+chisq_channel_type_total_results
+```
+
+**By Issue Area.**  
+
+```{r chisq-number-mentions-channel-type-issue}
+##Contingency tables and chi-square test for for total case mentions of Network News Post-Cable and Cable News by Issue Area
+contingency_channel_type_cases <- function_contingency_table(df_channel_split, IssueArea, ChannelTypeSplit, filter = "NetworkNewsPre2000")
+
+chisq_channel_type_cases <- function_rowwise_chisq(contingency_channel_type_cases, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+chisq_channel_type_cases_results <- gt(chisq_channel_type_cases) 
+
+chisq_channel_type_cases_results
+
+```
+
+**By Case Stage.**  
+
+```{r chisq-number-mentions-channel-type-stage}
+#Contingency tables and chi-square test for Network News Post-Cable and Cable News by Case Stage
+contingency_channel_type_case_stages <- function_contingency_table(df_channel_split, CaseStageCondensed, ChannelTypeSplit, filter = "NetworkNewsPre2000")
+
+chisq_channel_type_case_stages <- function_rowwise_chisq(contingency_channel_type_case_stages, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+gt(chisq_channel_type_case_stages)
+
+```
+
+
+#### Robustness Check  
+
+**In total**  
+
+```{r chisq-number-mentions-channel-type-total-robust}
+#Contingency tables and chi-square test for total sum of case mentions on Network News Post-Cable and Cable News
+contingency_channel_type_total_robust <-  df_channel_split_robust %>%
+  filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  group_by(ChannelTypeSplit) %>%
+  tally() %>%
+  datawizard::data_transpose(colnames = TRUE)
+
+chisq_channel_type_total_robust <- function_rowwise_chisq(contingency_channel_type_total_robust, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+gt(chisq_channel_type_total_robust)
+
+```
+
+**By Issue Area.**  
+
+```{r chisq-number-mentions-channel-type-total-issue-robust}
+##Contingency tables and chi-square test for for total case mentions of Network News Post-Cable and Cable News by Issue Area
+contingency_channel_type_cases_robust <- function_contingency_table(df_channel_split_robust, IssueArea, ChannelTypeSplit, filter = "NetworkNewsPre2000")
+
+chisq_channel_type_cases_robust <- function_rowwise_chisq(contingency_channel_type_cases_robust, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+gt(chisq_channel_type_cases_robust)
+```
+
+**By Case Stage.**  
+
+```{r chisq-number-mentions-channel-type-total-stage-robust}
+#Contingency tables and chi-square test for Network News Post-Cable and Cable News by Case Stage
+contingency_channel_type_case_stages_robust <- function_contingency_table(df_channel_split_robust, CaseStageCondensed, ChannelTypeSplit, filter = "NetworkNewsPre2000")
+
+chisq_channel_type_case_stages_robust <- function_rowwise_chisq(contingency_channel_type_case_stages_robust, var1 = "NetworkNewsPost2000", var2 = "CableNews")
+
+gt(chisq_channel_type_case_stages_robust)
+
+```
+
+
+### Cable News Program  
+
+Compares the number of news mentions of Hardball (MSNBC) and Special Report (Fox News) during the Court's 2000-2018 terms.  
+
+**In total**  
+
+```{r chisq-mntn-n-cable-total}
+#How often are SC cases mentioned in news coverage of cable programs?
+##Contingency tables and chi-square test for NewsProgram (Cable) total count
+contingency_table_cable_total <-  df_channel_split %>%
+  filter(ChannelType == "CableNews") %>%
+  group_by(NewsProgram) %>%
+  tally() %>%
+  datawizard::data_transpose(colnames = TRUE)
+
+chisq_cable_total <- function_rowwise_chisq(contingency_table_cable_total, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_total)
+```
+
+**By Issue Area.**  
+
+```{r chisq-mntn-n-cable-issues}
+##Contingency tables and chi-square test for NewsProgram (Cable) ~ IssueArea.
+contingency_table_cable_issue_areas <- function_contingency_table(df_channel_split, IssueArea, NewsProgram, filter = "WorldNewsTonight")
+
+chisq_cable_issue_areas <- function_rowwise_chisq(contingency_table_cable_issue_areas, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_issue_areas)
+```
+
+**By Case Stage.**  
+
+```{r chisq-mntn-n-cable-stage}
+##Contingency tables and chi-square test for NewsProgram (Cable) ~ CaseStage.
+contingency_table_cable_case_stages <- function_contingency_table(df_channel_split, CaseStageCondensed, NewsProgram, filter = "WorldNewsTonight")
+
+chisq_cable_case_stages <- function_rowwise_chisq(contingency_table_cable_case_stages, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_case_stages) 
+```
+
+
+
+#### Robustness Check  
+
+**In total**  
+
+```{r chisq-mntn-n-cable-total-robust}
+#How often are SC cases mentioned in news coverage of cable programs?
+##Contingency tables and chi-square test for NewsProgram (Cable) total count
+contingency_table_cable_total_robust <-  df_channel_split_robust %>%
+  filter(ChannelType == "CableNews") %>%
+  group_by(NewsProgram) %>%
+  tally() %>%
+  datawizard::data_transpose(colnames = TRUE)
+
+chisq_cable_total_robust <- function_rowwise_chisq(contingency_table_cable_total_robust, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_total_robust)
+```
+
+
+**By Issue Area.**  
+
+```{r chisq-mntn-n-cable-issue-robust}
+##Contingency tables and chi-square test for NewsProgram (Cable) ~ IssueArea.
+contingency_table_cable_issue_areas_robust <- function_contingency_table(df_channel_split_robust, IssueArea, NewsProgram, filter = "WorldNewsTonight")
+
+chisq_cable_issue_areas_robust <- function_rowwise_chisq(contingency_table_cable_issue_areas_robust, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_issue_areas_robust)
+```
+
+**By Case Stage.**  
+
+```{r chisq-mntn-n-cable-stage-robust}
+##Contingency tables and chi-square test for NewsProgram (Cable) ~ CaseStage.
+contingency_table_cable_case_stages_robust <- function_contingency_table(df_channel_split_robust, CaseStageCondensed, NewsProgram, filter = "WorldNewsTonight")
+
+chisq_cable_case_stages_robust <- function_rowwise_chisq(contingency_table_cable_case_stages_robust, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_cable_case_stages_robust)
+```
+
+
+## Distribution of Issue Areas  
+This compares issue area proportions between the news sample and between news samples and the Court's docket. To ensure comparability to the Court's docket, news samples from the 2000-2018 terms were limited to mentions referencing cases from those same terms.  
+
+```{r chisq-issue-prop-function, echo=FALSE}
+reshape_chisq_results <- function(chisq_result) {
+  
+  # Extract observed, expected, and stdres and reshape to long format
+  observed_long <- chisq_result$observed %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Observed", -ChannelTypeSplit)
+  
+  expected_long <- chisq_result$expected %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Expected", -ChannelTypeSplit)
+  
+  stdres_long <- chisq_result$stdres %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Std_Res", -ChannelTypeSplit)
+  
+  # Join the reshaped data frames together
+  result <- observed_long %>%
+    inner_join(expected_long, by = c("ChannelTypeSplit", "IssueArea")) %>%
+    inner_join(stdres_long, by = c("ChannelTypeSplit", "IssueArea"))
+  
+result_gt <- result %>%
+   group_by(IssueArea) %>%
+  gt()%>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()
+  )
+  
+  return(result_gt)
+}
+
+# for cable
+
+reshape_chisq_results_cable <- function(chisq_result) {
+  
+  # Extract observed, expected, and stdres and reshape to long format
+  observed_long <- chisq_result$observed %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Observed", -NewsProgram)
+  
+  expected_long <- chisq_result$expected %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Expected", -NewsProgram)
+  
+  stdres_long <- chisq_result$stdres %>%
+    as.data.frame() %>%
+    gather(key = "IssueArea", value = "Std_Res", -NewsProgram)
+  
+  # Join the reshaped data frames together
+  result <- observed_long %>%
+    inner_join(expected_long, by = c("NewsProgram", "IssueArea")) %>%
+    inner_join(stdres_long, by = c("NewsProgram", "IssueArea"))
+  
+result_gt <- result %>%
+   group_by(IssueArea) %>%
+  gt()%>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_row_groups()
+  )
+  
+  return(result_gt)
+}
+```
+
+### Channel Type and Time Period  
+
+**Network news time period, 1990-1999 and 2000-2018.**  
+
+```{r chisq-issue-prop-time-period, results='asis'}
+#Compare case area proportions of pre- and post-2000 network news & to SC docket proportions to see if news coverage distorts Court's workload
+#Contingency table: Channel Type ~ Issue Area
+#Create two individual contingency tables for network pre- and post-2000 (bc filter)
+contingency_issues_prop_channel <- df_channel_split %>%
+  filter(case_when(
+        ChannelTypeSplit == "NetworkNewsPost2000" ~ str_detect(CaseID, "^2"),
+        ChannelTypeSplit == "CableNews" ~ str_detect(CaseID, "^2"),
+        ChannelTypeSplit == "NetworkNewsPre2000" ~ str_detect(CaseID, "^1"))) %>%
+  group_by(ChannelTypeSplit, IssueArea) %>%
+  tabyl(ChannelTypeSplit, IssueArea) 
+
+chisq_issues_prop_time_period <- contingency_issues_prop_channel %>% filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE) 
+
+print(chisq_issues_prop_time_period)
+```
+
+**By channel type, network and cable news of the Court's 2000-2018 terms.**  
+
+```{r chisq-issue-prop-channel, results='asis'}
+#Compare case area proportions of post-2000 network and cable news 
+#Contingency table: Channel Type ~ Issue Area
+chisq_issues_prop_channel <- contingency_issues_prop_channel %>% filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE) 
+
+chisq_issues_prop_channel
+```
+
+Observed and expected values, standardized residuals.  
+
+```{r chisq-issue-prop-channel-extra}
+
+  reshape_chisq_results(chisq_issues_prop_channel) 
+```
+
+
+#### This compares issue area proportions between the news samples and the Court's docket.  
+
+**Pre-2000 network news and the Court's 1990-1999 dockets.**  
+
+```{r chisq-issue-prop-pre2000-network-sc, results='asis'}
+#Create pre-2000 network news with Supreme Court cases
+##Remove columns that aren't needed
+cols.remove <- c("CaseID",	"DateCert",	"DateArgument",	"DateDecision", "CaseName",	"CaseSummary", "TranscriptsCert",	"TranscriptsPostCert",	"TranscriptsArgument",	"TranscriptsPostArgument",	"TranscriptsDecision",	"TranscriptsPostDecision"
+)
+
+df_sc_cases <- cases_raw[, !(names(cases_raw) %in% cols.remove), ]
+
+##Count SC cases by Issue Area & Time Period
+df_sc_cases <- df_sc_cases %>%
+  group_by(IssueArea) %>%
+  tabyl(TimePeriod, IssueArea) %>%
+  rename(ChannelTypeSplit = TimePeriod) ##rename column to match other df bc otherwise rbind in the next step doesn't work, means 1990_1999 and 2000_2018 under ChannelTypeSplit are the Court
+
+#Compare pre- and post-2000 network news and sc proportions of issue areas
+##Combine pre- and post-2000 network news and sc dfs
+contingency_channel_sc <- rbind(contingency_issues_prop_channel, df_sc_cases) 
+
+##Check if sc and pre- and post-2000 network news and cable news differ
+chisq_pre2000_network_sc <- contingency_channel_sc %>%
+  filter(ChannelTypeSplit == "NetworkNewsPre2000" | ChannelTypeSplit == "1990_1999") %>%
+  chisq.test(correct = FALSE) 
+
+chisq_pre2000_network_sc
+```
+
+Observed and expected values, standardized residuals.  
+
+
+```{r chisq-issue-prop-pre2000-network-sc-extra}
+reshape_chisq_results(chisq_pre2000_network_sc) %>%
+  tab_footnote(
+  footnote = "Note: 1990_1999 represents the cases on the Supreme Court's docket during that time frame"
+)
+
+```
+
+
+**Post-2000 network news and the Court's 2000-2018 dockets.**    
+(This uses the fisher test because some expected values were < 5)  
+
+```{r chisq-issue-prop-post2000-network-sc, , results='asis'}
+chisq_post2000_network_sc <- contingency_channel_sc %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000" | ChannelTypeSplit == "2000_2018") %>%
+  chisq.test(correct = FALSE)
+
+#Fisher Test bc expected counts < 5
+fisher_post2000_network_sc <- contingency_channel_sc %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000" | ChannelTypeSplit == "2000_2018") %>%
+  fisher.test() 
+
+fisher_post2000_network_sc
+```
+
+Observed and expected values, standardized residuals.  
+
+
+```{r chisq-issue-prop-post2000-network-sc-extra}
+
+reshape_chisq_results(chisq_post2000_network_sc) %>%
+  tab_footnote(
+  footnote = "Note: 2000_2018 represents the cases on the Supreme Court's docket during that time frame"
+)
+```
+
+
+**Post-2000 cable news and the Court's 2000-2018 dockets.**  
+
+```{r chisq-issue-prop-post2000-cable-sc, results='asis'}
+chisq_post2000_cable_sc <- contingency_channel_sc %>%
+  filter(ChannelTypeSplit == "CableNews" | ChannelTypeSplit == "2000_2018") %>%
+  chisq.test(correct = FALSE)
+
+chisq_post2000_cable_sc
+
+```
+
+Observed and expected values, standardized residuals.  
+
+
+```{r chisq-issue-prop-post2000-cable-sc-extra}
+
+reshape_chisq_results(chisq_post2000_cable_sc) %>%
+  tab_footnote(
+  footnote = "Note: 2000_2018 represents the cases on the Supreme Court's docket during that time frame"
+)
+
+```
+
+
+### Robustness Check  
+
+Network news time period.  
+
+```{r chisq-issue-prop-time-period-robust, results='asis'}
+#Contingency table: Channel Type ~ Issue Area
+#Create two individual contingency tables for network pre- and post-2000 (bc filter)
+contingency_issues_prop_channel_robust <- df_channel_split_robust %>%
+  filter(case_when(
+        ChannelTypeSplit == "NetworkNewsPost2000" ~ str_detect(CaseID, "^2"),
+        ChannelTypeSplit == "CableNews" ~ str_detect(CaseID, "^2"),
+        ChannelTypeSplit == "NetworkNewsPre2000" ~ str_detect(CaseID, "^1"))) %>%
+  group_by(ChannelTypeSplit, IssueArea) %>%
+  tabyl(ChannelTypeSplit, IssueArea) 
+
+chisq_issues_prop_time_period_robust <- contingency_issues_prop_channel_robust %>% filter(ChannelTypeSplit != "CableNews") %>%
+  chisq.test(correct = FALSE)
+
+chisq_issues_prop_time_period_robust
+```
+
+**By Channel Type.**  
+
+```{r chisq-issue-prop-channel-robust, results='asis'}
+#Contingency table: Channel Type ~ Issue Area
+#Create two individual contingency tables for network pre- and post-2000 (bc filter)
+chisq_issues_prop_channel_robust <- contingency_issues_prop_channel_robust %>% filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
+  chisq.test(correct = FALSE) 
+
+chisq_issues_prop_channel_robust
+```
+
+**Comparing the news samples to the Court's docket (still robustness checks)**  
+
+**Network news and Court docket, 1990-1999 terms.**  
+
+```{r chisq-issue-prop-pre2000-network-sc-robust, results='asis'}
+#Compare pre- and post-2000 network news and sc proportions of issue areas
+##Combine pre- and post-2000 network news and sc dfs
+contingency_channel_sc_robust <- rbind(contingency_issues_prop_channel_robust, df_sc_cases) 
+
+##Check if sc and pre- and post-2000 network news and cable news differ
+chisq_pre2000_network_sc_robust <- contingency_channel_sc_robust %>%
+  filter(ChannelTypeSplit == "NetworkNewsPre2000" | ChannelTypeSplit == "1990_1999") %>%
+  chisq.test(correct = FALSE)
+
+chisq_pre2000_network_sc_robust
+```
+
+**Network news and Court docket, 2000-2018 terms.**  
+
+```{r chisq-issue-prop-post2000-network-sc-robust, results='asis'}
+chisq_post2000_network_sc_robust <- contingency_channel_sc_robust %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000" | ChannelTypeSplit == "2000_2018") %>%
+  chisq.test(correct = FALSE)
+
+chisq_post2000_network_sc_robust
+
+#Fisher Test bc expected counts < 5
+fisher_post2000_network_sc_robust <- contingency_channel_sc_robust %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000" | ChannelTypeSplit == "2000_2018") %>%
+  fisher.test()
+
+fisher_post2000_network_sc_robust
+```
+
+**Cable news and Court docket, 2000-2018 terms.**  
+
+```{r chisq-issue-prop-post2000-cable-sc-robust, results='asis'}
+chisq_post2000_cable_sc_robust <- contingency_channel_sc_robust %>%
+  filter(ChannelTypeSplit == "CableNews" | ChannelTypeSplit == "2000_2018") %>%
+  chisq.test(correct = FALSE) 
+
+chisq_post2000_cable_sc_robust
+```
+
+### Cable News Program  
+Compares issue area proportions between Hardball (MSNBC) and Special Report (Fox News) and between the shows and the Court's docket, 2000-2018 terms.  
+
+This compares the two shows.  
+
+```{r chisq-issue-prop-cable, results='asis'}
+#Compare case area proportions of cable programs & to SC docket proportions to see if news coverage distorts Court's workload
+#Contingency table: News Program ~ Issue Area
+contingency_issues_prop_cable <- df_channel_split %>%
+  filter(NewsProgram != "WorldNewsTonight" & str_detect(CaseID, "^2")) %>%
+  droplevels()%>%
+  group_by(NewsProgram, IssueArea) %>%
+  tabyl(NewsProgram, IssueArea) 
+
+chisq_issues_prop_cable <- contingency_issues_prop_cable %>%
+  chisq.test(correct = FALSE) 
+
+chisq_issues_prop_cable 
+```
+
+
+```{r chisq-issue-prop-cable-extra}
+
+reshape_chisq_results_cable(chisq_issues_prop_cable) 
+```
+
+
+
+#### This compares Hardball to the Court's docket, 2000-2018 terms.  
+
+This uses the fisher test as some expected values were <5.  
+
+```{r chisq-issue-prop-cable-hardball-sc, results='asis'}
+##Count SC cases by Issue Area & Year Group, and then remove pre-2000 counts to make comparable with cable data
+df_sc_cases <- df_sc_cases %>%
+  rename(NewsProgram = ChannelTypeSplit) ##rename column to match other df bc otherwise rbind in the next step doesn't work
+
+#Compare cable and sc proportions of issue areas
+##Combine cable and sc dfs
+contingency_table_cable_sc <- rbind(contingency_issues_prop_cable, df_sc_cases) 
+
+##Check if sc and cable programs differ
+chisq_issue_prop_hardball_sc <- contingency_table_cable_sc %>%
+  filter(NewsProgram != "SpecialReport" & NewsProgram != "1990_1999") %>%
+  chisq.test() 
+
+fisher_issue_prop_hardball_sc <- contingency_table_cable_sc %>%
+  filter(NewsProgram != "SpecialReport" & NewsProgram != "1990_1999") %>%
+  fisher.test() 
+
+fisher_issue_prop_hardball_sc
+```
+
+Observed and expected values, standardized residuals.  
+
+
+```{r chisq-issue-prop-cable-hardball-sc-extra}
+ reshape_chisq_results_cable(chisq_issue_prop_hardball_sc) %>% 
+  tab_footnote(
+  footnote = "Note: 2000_2018 represents the cases on the Supreme Court's docket during that time frame"
+)
+```
+
+
+#### This compares Special Report to the Court's docket, 2000-2018 terms.  
+
+```{r chisq-issue-prop-cable-special-report-sc, results='asis'}
+chisq_issue_prop_special_report_sc <- contingency_table_cable_sc %>%
+  filter(NewsProgram != "Hardball" & NewsProgram != "1990_1999") %>%
+  chisq.test() 
+
+chisq_issue_prop_special_report_sc
+```
+
+Observed and expected values, standardized residuals.  
+
+
+```{r chisq-issue-prop-cable-special-report-sc-extra}
+ reshape_chisq_results_cable(chisq_issue_prop_special_report_sc) %>%
+  tab_footnote(
+  footnote = "Note: 2000_2018 represents the cases on the Supreme Court's docket during that time frame"
+) 
+```
+
+
+#### Robustness Check  
+
+Robustness check for Hardball and Special Report comparison, 2000-2018 terms.  
+
+```{r chisq-issue-prop-cable-robust, results='asis'}
+#Compare case area proportions of cable programs & to SC docket proportions to see if news coverage distorts Court's workload
+#Contingency table: News Program ~ Issue Area
+contingency_issues_prop_cable_robust <- df_channel_split_robust %>%
+  filter(NewsProgram != "WorldNewsTonight" & str_detect(CaseID, "^2")) %>%
+  droplevels()%>%
+  group_by(NewsProgram, IssueArea) %>%
+  tabyl(NewsProgram, IssueArea) 
+
+chisq_issues_prop_cable_robust <- contingency_issues_prop_cable_robust %>%
+  chisq.test(correct = FALSE) 
+
+chisq_issues_prop_cable_robust
+
+#chisq_issues_prop_cable_extra_robust <- reshape_chisq_results_cable(chisq_issues_prop_cable_robust) 
+```
+
+
+Comparing Hardball and the Court's docket, 2000-2018 terms.  
+
+```{r chisq-issue-prop-cable-hardball-sc-robust, results='asis'}
+#Compare cable and sc proportions of issue areas
+##Combine cable and sc dfs
+contingency_table_cable_sc_robust <- rbind(contingency_issues_prop_cable_robust, df_sc_cases) 
+
+##Check if sc and cable programs differ
+chisq_issue_prop_hardball_sc_robust <- contingency_table_cable_sc_robust %>%
+  filter(NewsProgram != "SpecialReport" & NewsProgram != "1990_1999") %>%
+  chisq.test() 
+
+fisher_issue_prop_hardball_sc <- contingency_table_cable_sc %>%
+  filter(NewsProgram != "SpecialReport" & NewsProgram != "1990_1999") %>%
+  fisher.test() 
+
+fisher_issue_prop_hardball_sc
+```
+
+Comparing Special Report and the Court's docket, 2000-2018 terms.  
+
+```{r chisq-issue-prop-cable-special-report-sc-robust, results='asis'}
+chisq_issue_prop_special_report_sc_robust <- contingency_table_cable_sc_robust %>%
+  filter(NewsProgram != "Hardball" & NewsProgram != "1990_1999") %>%
+  chisq.test() 
+
+chisq_issue_prop_special_report_sc_robust
+```
+
+
+
+## Number of Unique Cases  
+This compares the news samples based on the number of cases they referenced in total and by issue area. To ensure comparability to the Court's docket, news samples from the 2000-2018 terms were limited to mentions referencing cases from those same terms. Different time frames and number of shows were accounted for and expected values adjusted accordingly.  
+
+### Time Period  
+
+Compares the number of cases referenced in network news mentions from the 1990-1999 terms and the 2000-2018 terms.  
+
+**In total**  
+
+```{r chisq-unique-cases-time-period-total, echo = FALSE, results='asis'}
+# Function to generate contingency tables
+generate_contingency <- function(data, channel_type, by_issue = TRUE) {
+  data_filtered <- data %>%
+    filter(ChannelTypeSplit == channel_type & (channel_type != "NetworkNewsPre2000" | !str_detect(CaseID, "^2")))
+  
+  if (by_issue) {
+    return(data_filtered %>%
+             group_by(ChannelTypeSplit, IssueArea) %>%
+             summarise(CasesCovered = n_distinct(CaseID)))
+  } else {
+    return(data_filtered %>%
+             group_by(ChannelTypeSplit) %>%
+             summarise(CasesCovered = n_distinct(CaseID)))
+  }
+}
+
+# Generate contingency tables
+contingency_pre2000_network_total <- generate_contingency(df_channel_split, "NetworkNewsPre2000", FALSE)
+contingency_post2000_network_total <- generate_contingency(df_channel_split, "NetworkNewsPost2000", FALSE)
+
+# Combine and reshape
+chisq_unique_cases_time_period_total <- rbind(contingency_pre2000_network_total, contingency_post2000_network_total) %>%  
+pivot_wider(names_from = ChannelTypeSplit, values_from = CasesCovered) %>%
+   chisq.test(p = c(0.3704, 0.6296))
+
+chisq_unique_cases_time_period_total <- function_chisq_results(chisq_unique_cases_time_period_total)
+
+chisq_unique_cases_time_period_total
+```
+
+
+**By Issue Area.**  
+
+
+```{r chisq-unique-cases-time-period-issue}
+# Generate contingency tables
+contingency_pre2000_cases <- generate_contingency(df_channel_split, "NetworkNewsPre2000", TRUE)
+contingency_post2000_cases <- generate_contingency(df_channel_split, "NetworkNewsPost2000", TRUE)
+
+# Combine and reshape
+contingency_unique_cases_time_period_cases <- rbind(contingency_pre2000_cases, contingency_post2000_cases) %>%
+  pivot_wider(id_cols = IssueArea, names_from = ChannelTypeSplit, values_from = CasesCovered)
+
+
+##Chisq Pre2000NetworkNews ~ Post2000NetworkNews by issue area
+chisq_unique_cases_time_period_cases <- function_rowwise_chisq_unique_cases(contingency_unique_cases_time_period_cases, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+gt(chisq_unique_cases_time_period_cases) 
+```
+
+
+#### Robustness Check  
+
+```{r chisq-unique-cases-time-period-total-robust, results='asis'}
+# Generate contingency tables
+contingency_pre2000_network_total_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPre2000", FALSE)
+contingency_post2000_network_total_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPost2000", FALSE)
+
+# Combine and reshape
+chisq_unique_cases_time_period_total_robust <- rbind(contingency_pre2000_network_total_robust, contingency_post2000_network_total_robust) %>%
+  pivot_wider(names_from = ChannelTypeSplit, values_from = CasesCovered) %>%
+  chisq.test(p = c(0.3704, 0.6296))
+
+chisq_unique_cases_time_period_total_robust
+
+```
+
+```{r chisq-unique-cases-time-period-issue-robust}
+# Generate contingency tables
+contingency_pre2000_network_total_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPre2000", FALSE)
+contingency_post2000_network_total_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPost2000", FALSE)
+
+contingency_pre2000_cases_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPre2000", TRUE)
+contingency_post2000_cases_robust <- generate_contingency(df_channel_split_robust, "NetworkNewsPost2000", TRUE)
+
+
+contingency_unique_cases_time_period_cases_robust <- rbind(contingency_pre2000_cases_robust, contingency_post2000_cases_robust) %>%
+  pivot_wider(id_cols = IssueArea, names_from = ChannelTypeSplit, values_from = CasesCovered)
+
+
+##Chisq Pre2000NetworkNews ~ Post2000NetworkNews by issue area
+chisq_unique_cases_time_period_cases_robust <- function_rowwise_chisq_unique_cases(contingency_unique_cases_time_period_cases_robust, var1 = "NetworkNewsPre2000", var2 = "NetworkNewsPost2000")
+
+gt(chisq_unique_cases_time_period_cases_robust) 
+```
+
+
+### Channel Type  
+
+Compares the number of cases referenced in network and cable news mentions from the 2000-2018 terms.  
+
+**In total**  
+
+```{r chisq-unique-cases-channel-type-total, echo = FALSE}
+generate_contingency_cable <- function(data, by_issue = TRUE) {
+  data_filtered <- data %>%
+    filter(ChannelTypeSplit == "CableNews" & str_detect(CaseID, "^2"))
+  
+  if (by_issue) {
+    return(data_filtered %>%
+             group_by(ChannelTypeSplit, IssueArea) %>%
+             summarise(CasesCovered = n_distinct(CaseID)))
+  } else {
+    return(data_filtered %>%
+             group_by(ChannelTypeSplit) %>%
+             summarise(CasesCovered = n_distinct(CaseID)))
+  }
+}
+
+##Format contingency table, wide format
+contingency_post2000_cable_total <- generate_contingency_cable(df_channel_split, FALSE)
+
+# Combine and reshape
+chisq_unique_cases_post2000_channel_total <- rbind(contingency_post2000_cable_total, contingency_post2000_network_total) %>%
+  pivot_wider(names_from = ChannelTypeSplit, values_from = CasesCovered) 
+
+##Chisq
+chisq_unique_cases_post2000_channel_total <- function_rowwise_chisq(chisq_unique_cases_post2000_channel_total, var1 = "CableNews", var2 = "NetworkNewsPost2000")
+
+gt(chisq_unique_cases_post2000_channel_total) %>%
+  cols_move_to_start(., NetworkNewsPost2000)
+
+
+
+```
+
+
+**By Issue Area.**  
+
+```{r chisq-unique-cases-channel-type-issue}
+##Format contingency table, wide format
+
+contingency_post2000_cable_cases <- generate_contingency_cable(df_channel_split, TRUE)
+
+# Combine and reshape
+contingency_unique_cases_post2000_channel_cases <- rbind(contingency_post2000_cable_cases, contingency_post2000_cases) %>%
+  pivot_wider(id_cols = IssueArea, names_from = ChannelTypeSplit, values_from = CasesCovered)
+
+##Chisq
+chisq_unique_cases_post2000_channel_cases <- function_rowwise_chisq_unique_cases(contingency_unique_cases_post2000_channel_cases, var1 = "NetworkNewsPost2000", var2 = "CableNews") 
+
+gt(chisq_unique_cases_post2000_channel_cases) 
+```
+
+
+#### Robustness Check  
+
+**In total**  
+
+```{r chisq-unique-cases-channel-type-total-robust}
+##Format contingency table, wide format
+contingency_post2000_cable_total_robust<- generate_contingency_cable(df_channel_split_robust, FALSE)
+
+# Combine and reshape
+chisq_unique_cases_post2000_channel_total_robust <- rbind( contingency_post2000_network_total_robust, contingency_post2000_cable_total_robust) %>%
+  pivot_wider(names_from = ChannelTypeSplit, values_from = CasesCovered)
+
+##Chisq
+chisq_unique_cases_post2000_channel_total_robust <- function_rowwise_chisq(chisq_unique_cases_post2000_channel_total_robust, var1 = "CableNews", var2 = "NetworkNewsPost2000")
+
+gt(chisq_unique_cases_post2000_channel_total_robust) %>%
+  cols_move_to_start(., NetworkNewsPost2000)
+
+```
+
+**By Issue Area.**  
+
+```{r chisq-unique-cases-channel-type-issue-robust}
+##Format contingency table, wide format
+contingency_post2000_cable_cases_robust <- generate_contingency_cable(df_channel_split_robust, TRUE)
+
+# Combine and reshape
+
+contingency_unique_cases_post2000_channel_cases_robust <- rbind(contingency_post2000_cable_cases_robust, contingency_post2000_cases_robust) %>%
+  pivot_wider(id_cols = IssueArea, names_from = ChannelTypeSplit, values_from = CasesCovered)
+
+
+##Chisq
+chisq_unique_cases_post2000_channel_cases_robust <- function_rowwise_chisq_unique_cases(contingency_unique_cases_post2000_channel_cases_robust, var1 = "NetworkNewsPost2000", var2 = "CableNews") 
+
+gt(chisq_unique_cases_post2000_channel_cases_robust) 
+
+```
+
+
+### Cable News Program  
+
+Compares the number of cases referenced in Hardball (MSNBC) and Special Report (Fox News)mentions from the 2000-2018 terms.  
+
+**In total**  
+
+```{r chisq-unique-cases-cable-shows-total}
+#Create contingency table for unique cases covered by cable news programs for cases 2000-2018: Total row
+contingency_unique_cases_cable_total <- df_channel_split %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(NewsProgram) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+##Format contingency table, wide format
+contingency_unique_cases_cable_total <- contingency_unique_cases_cable_total %>%
+  pivot_wider(names_from = NewsProgram, values_from = CasesCovered)
+
+##Chisq
+chisq_unique_cases_cable_total <- function_rowwise_chisq(contingency_unique_cases_cable_total, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_unique_cases_cable_total)
+```
+
+**By Issue Area.**  
+
+```{r chisq-unique-cases-cable-shows-issue}
+#Create contingency table for unique cases covered by cable news programs for cases 2000-2018: By Issue Area
+contingency_unique_cases_cable_cases <- df_channel_split %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(NewsProgram, IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+##Format contingency table, wide format
+contingency_unique_cases_cable_cases <- contingency_unique_cases_cable_cases %>%
+  pivot_wider(id_cols = IssueArea, names_from = NewsProgram, values_from = CasesCovered)
+
+##Chisq
+chisq_unique_cases_cable_cases <- function_rowwise_chisq(contingency_unique_cases_cable_cases, var1 = "Hardball", var2 = "SpecialReport") 
+
+gt(chisq_unique_cases_cable_cases) 
+```
+
+#### Robustness Check  
+
+**In total**  
+
+```{r chisq-unique-cases-cable-shows-total-robust, results='asis'}
+#Create contingency table for unique cases covered by cable news programs for cases 2000-2018: Total row
+contingency_unique_cases_cable_total_robust <- df_channel_split_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(NewsProgram) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+##Format contingency table, wide format
+contingency_unique_cases_cable_total_robust <- contingency_unique_cases_cable_total_robust %>%
+  pivot_wider(names_from = NewsProgram, values_from = CasesCovered) %>%
+  chisq.test(p = c(0.5, 0.5))
+
+contingency_unique_cases_cable_total_robust
+
+```
+
+**By Issue Area.**  
+
+```{r chisq-unique-cases-cable-shows-issue-robust}
+#Create contingency table for unique cases covered by cable news programs for cases 2000-2018: By Issue Area
+contingency_unique_cases_cable_cases_robust <- df_channel_split_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(NewsProgram, IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+##Format contingency table, wide format
+contingency_unique_cases_cable_cases_robust <- contingency_unique_cases_cable_cases_robust %>%
+  pivot_wider(id_cols = IssueArea, names_from = NewsProgram, values_from = CasesCovered)
+
+##Chisq
+chisq_unique_cases_cable_cases_robust <- function_rowwise_chisq(contingency_unique_cases_cable_cases_robust, var1 = "Hardball", var2 = "SpecialReport")
+
+gt(chisq_unique_cases_cable_cases_robust) 
+```

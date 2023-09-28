@@ -1,0 +1,533 @@
+---
+title: "News Volume Plots"
+author: "Lisa Matthias"
+date: "22 9 2023"
+output: 
+  html_document:
+      theme: readable
+      toc: yes
+      toc_float: yes
+      code_folding: hide 
+---
+
+```{r setup, echo=FALSE}
+#set up global R to display 3 digits (0.000)
+options(knitr.graphics.error = FALSE)
+options(digits = 3)
+
+#set up knit r global
+knitr::opts_chunk$set(
+  comment = "#>",
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  echo = TRUE,
+  fig.width = 6,
+  fig.asp = 0.618,
+  out.width = "70%",
+  fig.align = "center",
+  dpi = 300)
+```
+
+```{r packages, echo=FALSE}
+library(colorspace)
+library(ggh4x)
+library(ggpubr)
+library(janitor)
+library(patchwork)
+library(svglite)
+library(tidyverse)
+library(treemapify)
+library(waffle)
+```
+
+```{r main-data, echo=FALSE}
+# Read the local copy. Call this "mntn_raw"
+mntn_raw <- read.csv("data/NewsMentionSample.csv")
+
+# Read the local copy. Call this "cases_raw"
+cases_raw <- read.csv("data/SupremeCourtCaseIndex.csv")
+
+```
+
+```{r variable-transformation, echo=FALSE}
+# Set factor levels and labels
+IssueAreaLevels <- c(
+  "Abortion", "EconomicActivity",
+  "FirstAmendment",
+  "SexDiscrimination"
+)
+
+CaseStageLevels <- c(
+  "Cert", "PostCert", "Argument",
+  "PostArgument", "Decision",
+  "PostDecision"
+)
+
+ChannelTypeLevels <- c("NetworkNews", "CableNews")
+
+TimePeriodLevels <- c("2000_2018", "1990_1999")
+
+# Mutate columns in mntn_raw
+mntn_raw$IssueArea <- factor(mntn_raw$IssueArea,
+  levels = IssueAreaLevels
+)
+
+cases_raw$IssueArea <- factor(cases_raw$IssueArea,
+  levels = IssueAreaLevels)
+
+mntn_raw$CaseStage <- factor(mntn_raw$CaseStage,
+  levels = CaseStageLevels
+)
+
+mntn_raw$ChannelType <- factor(mntn_raw$ChannelType,
+  levels = c("NetworkNews", "CableNews")
+)
+
+mntn_raw$NewsProgram <- factor(mntn_raw$NewsProgram, levels = c("Hardball", "SpecialReport", "WorldNewsTonight"))
+
+mntn_raw$TimePeriod <- factor(mntn_raw$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+cases_raw$TimePeriod <- factor(cases_raw$TimePeriod,
+  levels = TimePeriodLevels
+)
+
+mntn_raw$CaseStageCondensed <- fct_collapse(mntn_raw$CaseStage,
+  "PreDecision" = c(
+    "Cert", "PostCert",
+    "Argument", "PostArgument"),
+  "Decision" = "Decision",
+  "PostDecision" = "PostDecision"
+)
+
+mntn_raw$CaseStageCondensed <- factor(mntn_raw$CaseStageCondensed, levels = c("PreDecision", "Decision", "PostDecision"))
+```
+
+```{r data-subsets, echo=FALSE}
+#Create new column with collapsed channel types
+df_channel_split <- mntn_raw %>%
+  mutate(ChannelTypeSplit = case_when(ChannelType == "CableNews" &  TimePeriod == "2000_2018" ~ "CableNews", ChannelType == "NetworkNews" &  TimePeriod == "2000_2018" ~ "NetworkNewsPost2000", ChannelType == "NetworkNews" &  TimePeriod == "1990_1999" ~ "NetworkNewsPre2000"))
+
+#Convert new column to factor
+ChannelTypeSplitLevels <- c("NetworkNewsPre2000","NetworkNewsPost2000","CableNews")
+
+df_channel_split$ChannelTypeSplit <- factor(df_channel_split$ChannelTypeSplit, levels = ChannelTypeSplitLevels, labels = ChannelTypeSplitLevels)
+```
+
+```{r gg-setup, echo=FALSE}
+theme_flip <-
+  theme(
+    text = element_text(size = 10, color = "black"),
+    plot.title = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 11),
+    panel.background = element_rect(fill = "#F5F5F5"),
+    strip.text.y = element_text(
+      color = "black",
+      margin = margin(t = 0, b = 0, r = 5, l = 5),
+      size = "8"
+    ),
+    axis.ticks = element_blank(),
+    axis.text.x = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  )
+
+PalChannelTypeSplit <- c("CableNews" = "#e27c7c", "NetworkNewsPost2000" = "#599e94", "NetworkNewsPre2000" = "#060661")
+
+PalchannelTypeSplitHighlight <- c(
+  "CableNews" = after_scale(colorspace::lighten("#e27c7c", .5)), 
+  "NetworkNewsPost2000" = after_scale(colorspace::lighten("#599e94", .5)), 
+  "NetworkNewsPre2000" = after_scale(colorspace::lighten("#060661", .5)))
+
+
+PalIssueArea <- c(
+  `Abortion` = "#315E44",
+  `EconomicActivity` = "#DD6031",
+  `FirstAmendment` = "#004346",
+  `SexDiscrimination` = "#D3A50D"
+)
+
+PalIssueAreaLight<- c(`Abortion` = after_scale(colorspace::lighten("#315E44", .5)), `EconomicActivity` = after_scale(colorspace::lighten("#DD6031", .5)), `FirstAmendment` = after_scale(colorspace::lighten("#004346", .5)),
+  `SexDiscrimination` = after_scale(colorspace::lighten("#D3A50D", .5)))
+```
+
+```{r lollipop-data-prep, echo=FALSE}
+# Function to generate value totals and total sample size
+generate_totals <- function(data, grouping_var_name){
+  value_totals <- data %>%
+    select(all_of(grouping_var_name), value) %>%
+    group_by(across(all_of(grouping_var_name)), value) %>%
+    tally()
+
+  total <- value_totals %>%
+    group_by(across(all_of(grouping_var_name))) %>%
+    summarise(n = sum(n)/2)
+  
+  total$value <- "Total"
+  
+  combined_df <- full_join(value_totals, total)
+  return(combined_df)
+}
+
+# Convert "value" to factor with defined levels
+convert_to_factor <- function(data){
+  factor_levels <- c("Total","Abortion", "EconomicActivity", "FirstAmendment", "SexDiscrimination", "PreDecision", "Decision", "PostDecision")
+  data$value <- factor(data$value, levels = factor_levels)
+  return(data)
+}
+
+# Reshape data
+df_lollipop <- reshape2::melt(df_channel_split, measure.vars = c("IssueArea", "CaseStageCondensed"))
+
+# Generate totals for ChannelTypeSplit
+df_lollipop_channel <- df_lollipop %>%
+  generate_totals("ChannelTypeSplit") %>%
+  convert_to_factor()
+
+# Generate totals for NewsProgram, excluding "WorldNewsTonight"
+df_lollipop_cable <- df_lollipop %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+  generate_totals("NewsProgram") %>%
+  convert_to_factor()
+```
+
+## Number of Supreme Court News Mentions   
+This compares the news samples based on the number of news mentions in total, by issue area, and case stage.  
+
+### Channel Type and Time Period  
+
+```{r lollipop_plot}
+# Function for lollipop charts showing number of news mentions in total and per issue area and case stage for each sample
+create_lollipop_chart <- function(data, facet_col) {
+  plot <- ggplot(data, aes(n, fct_rev(value))) +
+    geom_segment(aes(x = 0, y = fct_rev(value), xend = n, yend = fct_rev(value)), color = "grey50") +
+    geom_point(size = 2) +
+    geom_text(aes(n, fct_rev(value), label = n), 
+              colour = "black", position = position_nudge(x = 5, y = 0), size = 2) +
+    facet_grid(paste(". ~", facet_col)) +
+    scale_x_continuous(expand=c(0, 0), limits=c(0, NA)) +
+    theme_flip
+
+  return(plot)
+}
+
+# Generate lollipop charts
+lollipop_channel <- create_lollipop_chart(df_lollipop_channel, "ChannelTypeSplit")
+
+# Display and save the plots
+plot(lollipop_channel)
+#ggsave(path = "plots/NewsVolume", filename = "lollipop_channel.svg", width = 13.3, height = 9, units = "cm")
+```
+
+#### Final plots were edited in Adobe Illustrator 
+
+```{r lollipop-channel-edit}
+knitr::include_graphics("plots/AdobeEdits/lollipop_channel_edit.png", error = FALSE)
+```
+
+### Cable News Progam  
+
+```{r lollipop_cable}
+# Generate lollipop charts
+lollipop_cable <- create_lollipop_chart(df_lollipop_cable, "NewsProgram")
+
+lollipop_cable
+#ggsave(path = "plots/NewsVolume", filename = "lollipop_cable.svg", width = 13.3, height = 9, units = "cm")
+```
+
+#### Final plots were edited in Adobe Illustrator  
+
+```{r lollipop-cable-edit, error = FALSE}
+knitr::include_graphics("plots/AdobeEdits/lollipop_cable_edit.png", error = FALSE)
+```
+
+```{r treemap-function}
+# Function to create the treemap plot
+create_treemap_plot <- function(data) {
+  
+  # Compute the 'n' column for each IssueArea within the data
+  summarized_data <- data %>%
+    group_by(IssueArea) %>%
+    summarise(n = n()) %>%
+    ungroup()
+  
+  # Generate treemap plot
+  total_count <- sum(summarized_data$n)
+  plot <- summarized_data %>%
+    ggplot(aes(area = n, fill = IssueArea, 
+               label = paste(round((n/total_count) * 100), "%\n(n =", n, ")"))) +
+    geom_treemap(start = "topleft") +
+    geom_treemap_text(start = "topleft", colour = "black", place = "centre", size = 8) +
+    scale_fill_manual(values = PalIssueAreaLight)
+  
+  return(plot)
+}
+```
+
+## Distribution of Issue Areas  
+This compares issue area proportions between the news sample and between news samples and the Court's docket. To ensure comparability to the Court's docket, news samples from the 2000-2018 terms were limited to mentions referencing cases from those same terms.  
+
+### Channel Type and Time Period  
+
+```{r treemap-plots}
+# Pre-2000 Network News
+treemap_pre2000_network <- df_channel_split %>%
+                   filter(ChannelTypeSplit == "NetworkNewsPre2000") %>%
+  create_treemap_plot()+
+  labs(title = "Pre-2000 Network News Supreme Court News Mentions by Issue Area")
+
+#ggsave(path = "plots", filename = "treemap_pre2000_network.svg", width = 6.3, height = 4.72)
+
+# Post-2000 Network News
+treemap_post2000_network <- df_channel_split %>%
+                   filter(ChannelTypeSplit == "NetworkNewsPost2000",
+                          (str_detect(CaseID, "^2"))) %>%
+  create_treemap_plot()+
+  labs(title = "Post-2000 Network News Supreme Court News Mentions by Issue Area")
+
+#ggsave(path = "plots", filename = "treemap_post2000_network.svg", width = 6.3, height = 4.72)
+
+# Cable News
+treemap_post2000_cable <- df_channel_split %>%
+                   filter(ChannelTypeSplit == "CableNews",
+                          (str_detect(CaseID, "^2"))) %>%
+  create_treemap_plot()+
+  labs(title = "Cable News Supreme Court News Mentions by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "treemap_post2000_cable.svg", width = 6.3, height = 4.72)
+
+
+# Supreme Court Cases 1990-1990
+treemap_sc_pre2000 <- cases_raw %>%
+                  filter(TimePeriod == "1990_1999") %>%
+  create_treemap_plot()+
+  labs(title = "Supreme Court Cases 1990-1999 by Issue Area")
+
+
+#ggsave(path = "plots/NewsVolume", filename = "treemap_sc_pre2000.svg", width = 6.3, height = 4.72)
+
+
+# Supreme Court Cases 2000-2018
+treemap_sc_post2000 <- cases_raw %>%
+                  filter(TimePeriod == "2000_2018") %>%
+  create_treemap_plot()+
+  labs(title = "Supreme Court Cases 2000-2018 by Issue Area")
+
+
+#ggsave(path = "plots/NewsVolume", filename = "treemap_sc_post2000.svg", width = 6.3, height = 4.72)
+treemap_pre2000_network <- treemap_pre2000_network + coord_fixed(ratio = 1)
+
+treemap_post2000_network <- treemap_post2000_network + coord_fixed(ratio = 1)
+
+treemap_post2000_cable <- treemap_post2000_cable + coord_fixed(ratio = 1)
+
+treemap_sc_pre2000 <- treemap_sc_pre2000 + coord_fixed(ratio = 1)
+
+treemap_sc_post2000 <- treemap_sc_post2000 + coord_fixed(ratio = 1)
+
+
+treemap_channel <- ggarrange(ggarrange(treemap_pre2000_network + rremove("legend"), treemap_post2000_network + rremove("legend"), treemap_post2000_cable + rremove("legend"), ncol = 3, nrow = 1), ggarrange(treemap_sc_pre2000 + rremove("legend") , treemap_sc_post2000, ncol = 2, nrow = 1),
+          nrow = 2)
+
+treemap_channel
+
+```
+
+#### Final treemaps were edited in Adobe Illustrator  
+```{r treemap-channel_edit}
+knitr::include_graphics("plots/AdobeEdits/treemap_channel_edit.png", error = FALSE)
+```
+
+### Cable News Program  
+```{r treemap-cable}
+# Hardball
+treemap_cable_hardball <- df_channel_split %>%
+                   filter(NewsProgram == "Hardball",
+                          (str_detect(CaseID, "^2"))) %>%
+  create_treemap_plot()+
+  labs(title = "Hardball Supreme Court News Mentions by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "treemap_cable_hardball.svg", width = 6.3, height = 4.72)
+
+
+# Special Report
+treemap_cable_special_report <- df_channel_split %>%
+                   filter(NewsProgram == "SpecialReport",
+                          (str_detect(CaseID, "^2"))) %>%
+  create_treemap_plot()+
+  labs(title = "Special Report Supreme Court News Mentions by Issue Area")
+
+
+#ggsave(path = "plots/NewsVolume", filename = "treemap_cable_special_report.svg", width = 6.3, height = 4.72)
+
+treemap_cable_hardball <- treemap_cable_hardball + coord_fixed(ratio = 1)
+
+treemap_cable_special_report <- treemap_cable_special_report + coord_fixed(ratio = 1)
+
+treemap_cable <- ggarrange(ggarrange(treemap_cable_hardball + rremove("legend"), treemap_cable_special_report + rremove("legend"), ncol = 2, nrow = 1), treemap_sc_post2000, nrow = 2)
+
+treemap_cable
+```
+
+#### Final treemaps were edited in Adobe Illustrator  
+```{r treemap-cable_edit}
+knitr::include_graphics("plots/AdobeEdits/treemap_cable_edit.png", error = FALSE)
+```
+
+```{r waffle-unique-cases, echo=FALSE}
+#create dfs with unique case counts (SC + ChannelType)
+#1990-1999 Network News & SC
+df_unique_cases_sc_pre2000 <- cases_raw %>%
+  filter(TimePeriod == "1990_1999") %>%
+  group_by(IssueArea) %>%
+  summarise(CasesTotal = n_distinct(CaseID))
+
+df_unique_cases_pre2000_network <- df_channel_split %>%
+  filter(ChannelTypeSplit == "NetworkNewsPre2000") %>%
+  group_by(IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+#2000-2018 Network News, Cable & SC
+df_unique_cases_sc_post2000 <- cases_raw %>%
+  filter(TimePeriod != "1990_1999") %>%
+  group_by(IssueArea) %>%
+  summarise(CasesTotal = n_distinct(CaseID))
+
+df_unique_cases_post2000_network <- df_channel_split %>%
+  filter(ChannelTypeSplit == "NetworkNewsPost2000") %>%
+   filter((str_detect(CaseID, "^2"))) %>%
+  group_by(IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+df_unique_cases_post2000_cable <- df_channel_split %>%
+  filter(ChannelTypeSplit == "CableNews") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+#2000-2018 Network News, Cable & SC
+df_unique_cases_cable_hardball <- df_channel_split %>%
+  filter(NewsProgram == "Hardball") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+
+df_unique_cases_cable_special_report <- df_channel_split %>%
+  filter(NewsProgram == "SpecialReport") %>%
+  filter((str_detect(CaseID, "^2"))) %>%
+  group_by(IssueArea) %>%
+  summarise(CasesCovered = n_distinct(CaseID))
+```
+
+```{r waffle-data-prep-function, echo=FALSE}
+prepare_waffle_data <- function(df_news, df_sc) {
+  # Join and prepare data
+  df_prepared <- df_news %>%
+    left_join(df_sc, by = "IssueArea") %>%
+    mutate(CasesNotCovered = CasesTotal - CasesCovered) 
+
+  
+  df_prepared <- df_prepared %>%
+    pivot_longer(cols = c("CasesCovered", "CasesNotCovered"), names_to = "variable", values_to = "value") %>%
+    mutate(variable = factor(variable, levels = c("CasesCovered", "CasesNotCovered")),
+           Group = interaction(IssueArea, variable)) %>%
+    arrange(IssueArea, Group) %>%
+    filter(value != 0)
+  
+  return(df_prepared)
+}
+```
+
+```{r waffle-plot-function, echo=FALSE}
+  function_waffle_plot <- function(df) {waffle_plot <- df %>%
+    ggplot(aes(fill = as.factor(Group), values = value)) +
+  geom_waffle(n_rows = 7, make_proportional = FALSE, size = 1, colour = "white") +
+  scale_x_discrete(expand=c(0,0)) +
+  scale_y_discrete(expand=c(0,0)) +
+  scale_fill_manual(values = c(
+    `Abortion.CasesCovered` = "#87AE95",
+    `EconomicActivity.CasesCovered` = "#F8AB9C",
+    `FirstAmendment.CasesCovered` = "#799EA1",
+    `SexDiscrimination.CasesCovered` = "#FECF5D",
+    `Abortion.CasesNotCovered` ="#CFDFD5",
+    `EconomicActivity.CasesNotCovered` = "#FCDDD7",
+    `FirstAmendment.CasesNotCovered` = "#C9D8D9",
+    `SexDiscrimination.CasesNotCovered` = "#FEE29E")) +
+  coord_equal() +
+  theme_void()+
+  theme(legend.position = "none") +
+  theme_enhance_waffle()
+
+return(waffle_plot)
+}
+```
+
+## Number of Unique Cases   
+This compares the news samples based on the number of cases they referenced in total and by issue area. To ensure comparability to the Court's docket, news samples from the 2000-2018 terms were limited to mentions referencing cases from those same terms.
+
+### Channel Type and Time Period  
+
+```{r waffle-plots}
+# Pre-2000 Network
+df_waffle_pre2000 <- prepare_waffle_data(df_unique_cases_pre2000_network, df_unique_cases_sc_pre2000)
+
+waffle_pre2000_network <- function_waffle_plot(df_waffle_pre2000) +
+  labs(title = "Pre-2000 Network News Number of Cases Covered/Not Covered by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "waffle_pre2000_network.svg", width = 6.3, height = 4.72)
+
+# Post-2000 Network and Cable
+df_waffle_post2000_network <- prepare_waffle_data(df_unique_cases_post2000_network, df_unique_cases_sc_post2000)
+
+waffle_post2000_network <- function_waffle_plot(df_waffle_post2000_network)  +
+  labs(title = "Post-2000 Network News Number of Cases Covered/Not Covered by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "waffle_post2000_network.svg", width = 6.3, height = 4.72)
+
+df_waffle_post2000_cable <- prepare_waffle_data(df_unique_cases_post2000_cable, df_unique_cases_sc_post2000)
+
+waffle_post2000_cable <- function_waffle_plot(df_waffle_post2000_cable) +
+  labs(title = "Cable News Number of Cases Covered/Not Covered by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "waffle_post2000_cable.svg", width = 6.3, height = 4.72)
+
+# Patchwork plots
+waffle_channel <- ggarrange(waffle_pre2000_network  + rremove("legend"), waffle_post2000_network  + rremove("legend"), waffle_post2000_cable  + rremove("legend"), nrow = 3)
+
+waffle_channel
+```
+
+#### Final plots were edited in Adobe Illustrator  
+```{r waffle-channel_edit}
+knitr::include_graphics("plots/AdobeEdits/waffle_channel_edit.png", error = FALSE)
+```
+
+### Cable News Program  
+```{r waffle-cable}
+# Cable Shows: Hardball and Special Report
+df_waffle_cable_hardball <- prepare_waffle_data(df_unique_cases_cable_hardball, df_unique_cases_sc_post2000)
+
+waffle_cable_hardball <- function_waffle_plot(df_waffle_cable_hardball)  +
+  labs(title = "Hardball Number of Cases Covered/Not Covered by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "waffle_cable_hardball.svg", width = 6.3, height = 4.72)
+
+df_waffle_cable_special_report <- prepare_waffle_data(df_unique_cases_cable_special_report, df_unique_cases_sc_post2000)
+
+waffle_cable_special_report <- function_waffle_plot(df_waffle_cable_special_report)  +
+  labs(title = "Special Report Number of Cases Covered/Not Covered by Issue Area")
+
+#ggsave(path = "plots/NewsVolume", filename = "waffle_cable_special_report.svg", width = 6.3, height = 4.72)
+
+# Patchwork plots
+waffle_cable <- ggarrange(waffle_cable_hardball  + rremove("legend"), waffle_cable_special_report  + rremove("legend"), nrow = 2)
+
+waffle_cable
+```
+
+#### Final plots were edited in Adobe Illustrator   
+```{r waffle-cable_edit}
+knitr::include_graphics("plots/AdobeEdits/waffle_cable_edit.png", error = FALSE)
+```
