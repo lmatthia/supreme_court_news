@@ -1,5 +1,5 @@
 ﻿on: 
-  release:
+  push:
   workflow_dispatch:
 
 jobs:
