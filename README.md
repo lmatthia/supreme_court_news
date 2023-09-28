@@ -14,12 +14,12 @@ Folder structure:
 
 ### Stats & Pretty Plots
 
-- [`rmd/001_NewsVolumeStats.Rmd`](rmd/001_NewsVolumeStats.Rmd) contains the results of the statistical analysis for my chapter on news volume. Includes robustness checks.
-- [`rmd/002_NewsVolumePlots.Rmd`](rmd/002_NewsVolumePlots.Rmd) presents the plots for the news volume chapter, R version and after manual edits in Adobe Illustrator. 
-- [`rmd/003_NewsFormatStats.Rmd`](rmd/003_NewsFormatStats.Rmd) contains the results of the statistical analysis for my chapter on news format. Includes robustness checks. 
-- [`rmd/004_NewsFormatPlots.Rmd`](rmd/004_NewsFormatPlots.Rmd) presents the plots for the news format chapter, R version and after manual edits in Adobe Illustrator. 
-- [`rmd/005_NewsPresentationStats.Rmd`](rmd/005_NewsPresentationStats.Rmd) contains the results of the statistical analysis for my chapter on news presentation (robust sample). 
-- [`rmd/006_NewsPresentation.Rmd`](rmd/006_NewsPresentation.Rmd) presents the plots for the news presentation chapter, R version and after manual edits in Adobe Illustrator.
+- [`rmd/001_NewsVolumeStats.Rmd`](rmd/001_NewsVolumeStats.Rmd) contains the results of the statistical analysis for my chapter on news volume. Includes robustness checks.[Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/001_NewsVolumeStats.html)
+- [`rmd/002_NewsVolumePlots.Rmd`](rmd/002_NewsVolumePlots.Rmd) presents the plots for the news volume chapter, R version and after manual edits in Adobe Illustrator. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/002_NewsVolumePlots.html)
+- [`rmd/003_NewsFormatStats.Rmd`](rmd/003_NewsFormatStats.Rmd) contains the results of the statistical analysis for my chapter on news format. Includes robustness checks. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/003_NewsFormatStats.html)
+- [`rmd/004_NewsFormatPlots.Rmd`](rmd/004_NewsFormatPlots.Rmd) presents the plots for the news format chapter, R version and after manual edits in Adobe Illustrator. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/004_NewsFormatPlots.html)
+- [`rmd/005_NewsPresentationStats.Rmd`](rmd/005_NewsPresentationStats.Rmd) contains the results of the statistical analysis for my chapter on news presentation (robust sample). [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/005_NewsPresentationStats.html)
+- [`rmd/006_NewsPresentation.Rmd`](rmd/006_NewsPresentation.Rmd) presents the plots for the news presentation chapter, R version and after manual edits in Adobe Illustrator. [Rendered here](https://rawcdn.githack.com/lmatthia/supreme_court_news/a1fafa5e0c0c221a556c6a1f89684068d1f62cf5/docs/006_NewsPresentationPlots.html)
 
 ### Data files
 
