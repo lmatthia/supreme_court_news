@@ -22,10 +22,10 @@ knitr::opts_chunk$set(
   warning = FALSE,
   message = FALSE,
   echo = TRUE,
-  fig.path = "figures/",
-  fig.width = 6,
+  fig.path = "/plots/NewsPresentation",
+  fig.width = 10,
   fig.asp = 0.618,
-  out.width = "70%",
+  out.width = "80%",
   fig.align = "center",
   dpi = 300)
 ```
@@ -52,7 +52,7 @@ mntn_emo$ChannelType <- factor(mntn_emo$ChannelType,
 )
 
 mntn_emo$IssueArea <- factor(mntn_emo$IssueArea,
-  levels = c("Abortion", "EconomicActivity", "FirstAmendment","Sex Discrimination"))
+  levels = c("Abortion", "EconomicActivity", "FirstAmendment","SexDiscrimination"))
 
 mntn_emo$NewsProgram <- factor(mntn_emo$NewsProgram, levels = c("Hardball", "SpecialReport", "WorldNewsTonight"))
 
@@ -546,12 +546,31 @@ distinct_emo_count_df <-  mntn_emo_robust %>%
 
 mntn_emo_robust$CaseStageCondensed <- factor(mntn_emo_robust$CaseStageCondensed, levels = c("PreDecision", "Decision", "PostDecision"), labels = c("PreDecision", "Decision", "PostDecision"))
 
-##include this in github repo (past-Lisa didn't leave a note why to include this)
-violin_channel_neg_case_stage <-
+```
+
+
+## Does the amount of emotional appeals differ between issue areas?
+```{r check-emo-issue}  
+# ggstatsplot for quick overview
+violin_channel_neg_issue <-
 mntn_emo_robust %>%
   filter(ChannelTypeSplit != "NetworkNewsPre2000") %>%
-ggstatsplot::grouped_ggbetweenstats(x = CaseStageCondensed, y = NegativeEmotion, grouping.var = ChannelTypeSplit, type = "np")
+ggstatsplot::grouped_ggbetweenstats(x = IssueArea, y = NegativeEmotion, grouping.var = ChannelTypeSplit, type = "np")
 
-violin_channel_neg_case_stage
+violin_network_neg_issue <-
+mntn_emo_robust %>%
+  filter(ChannelTypeSplit != "CableNews") %>%
+ggstatsplot::grouped_ggbetweenstats(x = IssueArea, y = NegativeEmotion, grouping.var = ChannelTypeSplit, type = "np")
+
+violin_cable_neg_issue <-
+mntn_emo_robust %>%
+  filter(NewsProgram != "WorldNewsTonight") %>%
+ggstatsplot::grouped_ggbetweenstats(x = IssueArea, y = NegativeEmotion, grouping.var = NewsProgram, type = "np")
+
+violin_network_neg_issue
+
+violin_channel_neg_issue
+
+violin_cable_neg_issue
+
 ```
-  
